@@ -246,14 +246,6 @@ int main(void)
 	  HAL_ADC_Start_DMA (&hadc1, &pot_reading, 1);
 	  HAL_GPIO_WritePin(GPIOC, GREEN_LED, GPIO_PIN_SET);
 	  state_estimate();
-#define POWER_ON		0
-#define INITIALISING	1
-#define INITIALISED		2
-#define SETTLING_STATE 	3
-#define STEADY_STATE	4
-#define CUTTING			5
-#define COOLDOWN		6
-#define UNKNOWN_STATE 	7
 	  switch (current_state){
 	  case INITIALISING:
 		  UART_output();
@@ -275,9 +267,11 @@ int main(void)
 		  UART_output;
 		  break;
 	  case COOLDOWN:
-		  warm_up_controller();
+		  cooling_controller();
 		  UART_output();
 		  break;
+	  case UNKNOWN_STATE:
+		  set_PWM_driveFET(0);
 	  }
 
 	  //HAL_GPIO_TogglePin(GPIOB, RED_LED);
