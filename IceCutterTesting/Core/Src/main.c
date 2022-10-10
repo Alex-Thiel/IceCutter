@@ -63,7 +63,7 @@ UART_HandleTypeDef huart2;
 #define INA_CURRENT_LSB 	3E-5
 #define INA_POWER_LSB 		0.008 //current_LSB *20
 #define INA_CONFIG_VALUE 	0x299F //sets PGA =2
-#define MAX_INRUSH_CURRENT 	55//limit of power supply
+#define MAX_INRUSH_CURRENT 	55
 
 #define TMP_TEMP_REG  		0x00
 #define TMP_LSB  			0.0078125 //set from datasheet
@@ -117,35 +117,29 @@ UART_HandleTypeDef huart2;
 #define Ki_slow 0
 #define Kp_slow 0
 #define Kd_slow 0
-
-#define Ki_cutting 0
-#define Kp_cutting 0
-#define Kd_cutting 0
-
-#define Ki_cooling 0
-#define Kp_cooling 0
-#define Kd_cooling 0
-
 float integral = 0;
 float derivative = 0;
 float prev_error = 0;
 
 
+#define Ki_fast 0
+#define Kp_fast 0
+#define Kd_fast 0
+
+uint16_t duty_cycle_global;
+uint8_t current_state;
+
+float wire_temp_global;
+float prev_wire_temp_global;
+uint16_t pot_reading;
+float temp_setpoint;
+float TMP_Input;
+float TMP_Output;
+float TMP_Ambient;
+float current_input;
+float current_output;
 
 
-uint16_t 	duty_cycle_global;
-uint8_t 	current_state;
-
-float 		wire_temp_global;
-float 		prev_wire_temp_global;
-uint32_t 	pot_reading;
-float 		temp_setpoint;
-float 		out_current;
-float 		in_current;
-
-float 		TMP_WIRE;
-float 		TMP_INPUT;
-float 		TMP_AMBIENT;
 //uint16_t buffer[];
 
 
@@ -185,9 +179,6 @@ void UART_output();
 void set_PWM_driveFET(float duty_cycle);
 double fabs(double x);
 uint16_t pot_temp();
-void cutting_controller();
-void warm_up_controller();
-void state_estimate();
 
 /* USER CODE END 0 */
 
@@ -243,38 +234,17 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  HAL_ADC_Start_DMA (&hadc1, &pot_reading, 1);
-	  HAL_GPIO_WritePin(GPIOC, GREEN_LED, GPIO_PIN_SET);
-	  state_estimate();
-	  switch (current_state){
-	  case INITIALISING:
-		  UART_output();
-		  break;
-	  case INITIALISED:
-		  UART_output();
-		  break;
-	  case SETTLING_STATE:
-		  warm_up_controller();
-		  UART_output();
-		  break;
-	  case STEADY_STATE:
-		  warm_up_controller();
-		  UART_output();
-		  //keep temp constant while wait for wire temp change due to ice or cutting button press
-		  break;
-	  case CUTTING:
-		  cutting_controller();
-		  UART_output;
-		  break;
-	  case COOLDOWN:
-		  cooling_controller();
-		  UART_output();
-		  break;
-	  case UNKNOWN_STATE:
-		  set_PWM_driveFET(0);
-	  }
 
-	  //HAL_GPIO_TogglePin(GPIOB, RED_LED);
+	  //HAL_ADC_Start(&hadc1);
+	  //HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
+	  //HAL_ADC_Start_IT(&hadc1);
+	  HAL_ADC_Start_DMA (&hadc1, &pot_reading, 1);
+	  //set_PWM_driveFET(1);
+	  HAL_GPIO_TogglePin(GPIOB, RED_LED);
+	  UART_output();
+	  HAL_GPIO_TogglePin(GPIOB, RED_LED);
+	  //set_PWM_driveFET(0);
+
 
 
 	  //set_PWM_driveFET(0.75);
@@ -605,10 +575,13 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOA_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9|GPIO_PIN_0, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_15, GPIO_PIN_SET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
 
   /*Configure GPIO pin : PB8 */
   GPIO_InitStruct.Pin = GPIO_PIN_8;
@@ -619,8 +592,8 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin : PB9 */
   GPIO_InitStruct.Pin = GPIO_PIN_9;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /*Configure GPIO pin : PC15 */
@@ -642,9 +615,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  /**/
-  __HAL_SYSCFG_FASTMODEPLUS_ENABLE(SYSCFG_FASTMODEPLUS_PB9);
 
   /* EXTI interrupt init*/
   HAL_NVIC_SetPriority(EXTI0_1_IRQn, 0, 0);
@@ -714,18 +684,20 @@ static void MX_GPIO_Init(void)
 	   //uint8_t value_LSB = 0.0078125;
 	   int16_t device_measurement = read_register(device_address, TMP_TEMP_REG);
 	   float temp = TMP_LSB * device_measurement;
-	   switch (device_address){
-	   case TMP_ADD_WIRE:
-		   TMP_WIRE = temp;
+
+	   switch(device_address){
+	   case TMP_ADD_AMBIENT:
+		   TMP_Ambient = temp;
 		   break;
 	   case TMP_ADD_INPUT:
-		   TMP_INPUT = temp;
+		   TMP_Input = temp;
 		   break;
-	   case TMP_ADD_AMBIENT:
-		   TMP_AMBIENT = temp;
+	   case TMP_ADD_WIRE:
+		   TMP_Output = temp;
 		   break;
 	   }
 	   return temp;
+
  }
 
  /**
@@ -737,12 +709,14 @@ static void MX_GPIO_Init(void)
  {
 	   int temp = read_register(device_address,INA_CURRENT_REG);
 	   float current = INA_CURRENT_LSB*temp;
-	   switch(device_address){
+
+	   switch (device_address){
 	   case WIRE_INA219:
-		   out_current = current;
+		   current_output = current;
 		   break;
 	   case INPUT_INA219:
-		   in_current = current;
+		   current_input = current;
+		   break;
 	   }
 	   return current;
  }
@@ -810,24 +784,26 @@ static void MX_GPIO_Init(void)
       * @retval
  */
  void SS_charge(){
-	 	 uint8_t counter = 0;
-	   HAL_GPIO_WritePin(GPIOB,SS_FET,GPIO_PIN_RESET);//SS_FET low allows soft-start circuit to charge caps
+	 uint8_t counter = 0;
+	   HAL_GPIO_WritePin(GPIOB,SS_FET,GPIO_PIN_RESET);
 	   while(HAL_GPIO_ReadPin(GPIOB,SS_FET) == GPIO_PIN_RESET){
-		   float input_current = measure_current(INPUT_INA219);//measure input current
+		   float input_current = measure_current(INPUT_INA219);
 		   if(input_current >= MAX_INRUSH_CURRENT){
 			   HAL_GPIO_WritePin(GPIOB,SS_FET, GPIO_PIN_SET); //stop charging caps
-			   counter = counter + 1;
+			   counter = counter +1;
+			   HAL_GPIO_WritePin(GPIOB,SS_FET, GPIO_PIN_RESET); //stop charging caps
 		   }else if(input_current >= MAX_INRUSH_CURRENT && counter >=1){
 			   HAL_GPIO_WritePin(GPIOB,SS_FET, GPIO_PIN_SET); //stop charging caps
 			   pulse_charge_SS();
 		   }else if(temp_checks() == ABOVE_THRESHOLD){
 			   HAL_GPIO_WritePin(GPIOB,SS_FET, GPIO_PIN_SET); //stop charging caps
 			   while(temp_checks()==ABOVE_THRESHOLD){
-				   HAL_Delay(10); //allow time for board to cool
+				   HAL_Delay(100); //allow time for board to cool
 			   }
 			   HAL_GPIO_WritePin(GPIOB,SS_FET,GPIO_PIN_RESET);
 		   }else if(measure_current(INPUT_INA219)==0){//capacitors fully charged, no current flow
 			   HAL_GPIO_WritePin(GPIOB,SS_FET, GPIO_PIN_SET);//stop soft start circuit charging caps
+			   break;
 		   }
 		   UART_output();
 	   }
@@ -839,12 +815,13 @@ static void MX_GPIO_Init(void)
    * @retval
  */
  void pulse_charge_SS(){
-	 for (uint8_t i = 1; i < 50; ++i){//repetedly pulses SS_FET to force system to charge over 2.5ms
-		 HAL_GPIO_WritePin(GPIOB,SS_FET,GPIO_PIN_RESET);
-		 HAL_Delay(0.05);
-		 HAL_GPIO_WritePin(GPIOB,SS_FET,GPIO_PIN_SET);
-	 }
-	 HAL_GPIO_WritePin(GPIOB,SS_FET,GPIO_PIN_RESET);//allows caps to continue charging
+	   for (uint8_t i = 1; i < 50; ++i)
+	     {
+		   HAL_GPIO_WritePin(GPIOB,SS_FET,GPIO_PIN_RESET);
+		   HAL_Delay(0.05);
+		   HAL_GPIO_WritePin(GPIOB,SS_FET,GPIO_PIN_SET);
+	     }
+	   HAL_GPIO_WritePin(GPIOB,SS_FET,GPIO_PIN_RESET);
  }
 
 /** @brief	Use soft-start circuit to charge capacitors, green LED turned on once capacitors fully charged
@@ -857,21 +834,17 @@ static void MX_GPIO_Init(void)
 		HAL_GPIO_WritePin(GPIOB,SS_FET,GPIO_PIN_SET); //keep SS_FET high, soft start stops Caps charging
 		ina_initialise(WIRE_INA219);//set config registers of INA219s
 		ina_initialise(INPUT_INA219);
-		UART_output();
-
-	   //TODO prompt user for reference temp input via UART
+	   //prompt user for reference temp input via UART
 	   //once got input, shut down interrupt channel
 
-
-		uint8_t temps_in_range = ABOVE_THRESHOLD;
-		while(temps_in_range == ABOVE_THRESHOLD){
-			temps_in_range = temp_checks();//continue sampling temps until they in range
-		}
-		SS_charge();
-		HAL_GPIO_WritePin(GPIOB,SS_FET, GPIO_PIN_SET);//allow SS_FET to conduct to keep caps charged
-		HAL_GPIO_WritePin(GPIOC, GREEN_LED, GPIO_PIN_SET); // green LED2 turn on, system ready to cut
-		current_state = INITIALISED;
-		UART_output();
+	   uint8_t temps_in_range = ABOVE_THRESHOLD;
+	   while(temps_in_range == ABOVE_THRESHOLD){
+		   temps_in_range = temp_checks();
+	   }
+	   SS_charge();
+	   HAL_GPIO_WritePin(GPIOB,SS_FET, GPIO_PIN_SET);//allow SS_FET to conduct to keep caps charged
+	   HAL_GPIO_WritePin(GPIOC, GREEN_LED, GPIO_PIN_SET); // green LED2 turn on, system ready to cut
+	   current_state = INITIALISED;
  }
 
 
@@ -882,39 +855,35 @@ static void MX_GPIO_Init(void)
 void UART_output(){
     	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n ------------------",sizeof("\r\n ------------------"),10);
     	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Output current: ",sizeof("\r\n Output current: "),10);
-    	 //float current = measure_current(WIRE_INA219);
+
     	 uint8_t output[7];
-    	 sprintf(output,"%d.%02u", (int) out_current, (int) fabs(((out_current - (int) out_current ) * 100)));
+    	 sprintf(output,"%d.%02u", (int) current_output, (int) fabs(((current_output - (int) current_outputrrent ) * 100)));
     	 HAL_UART_Transmit(&huart2,output,sizeof(output),10);
 
-    	 //current = measure_current(INPUT_INA219);
     	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Input current: ",sizeof("\r\n Input current: "),10);
-    	 sprintf(output,"%d.%02u", (int) in_current, (int) fabs(((in_current - (int) in_current ) * 100)));
+    	 sprintf(output,"%d.%02u", (int) current_input, (int) fabs(((current_input - (int) current_input ) * 100)));
     	 HAL_UART_Transmit(&huart2,output,sizeof(output),10);
 
     	 //gcvt(ambient_temp,6,output);
-    	 //float ambient_temp = get_temp_TMP117(TMP_ADD_AMBIENT);
     	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Ambient temp: ",sizeof("\r\n Ambient temp: "),10);
-    	 sprintf(output,"%d.%02u", (int) TMP_AMBIENT, (int) fabs(((TMP_AMBIENT - (int) TMP_AMBIENT) * 100)));
+    	 sprintf(output,"%d.%02u", (int) TMP_Ambient, (int) fabs(((TMP_Ambient - (int) TMP_Ambient ) * 100)));
     	 HAL_UART_Transmit(&huart2,output,sizeof(output),10);
 
-    	 //ambient_temp = get_temp_TMP117(TMP_ADD_INPUT);
+
     	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Input shunt temp: ",sizeof("\r\n Input shunt temp: "),10);
-    	 sprintf(output,"%d.%02u", (int) TMP_INPUT, (int) fabs(((TMP_INPUT- (int) TMP_INPUT) * 100)));
+    	 sprintf(output,"%d.%02u", (int) TMP_Input, (int) fabs(((TMP_Input - (int) TMP_Input ) * 100)));
     	 HAL_UART_Transmit(&huart2,output,sizeof(output),10);
 
-    	 //ambient_temp = get_temp_TMP117(TMP_ADD_WIRE);
+
     	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Output shunt temp: ",sizeof("\r\n Output shunt temp: "),10);
-    	 sprintf(output,"%d.%02u", (int) TMP_WIRE, (int) fabs(((TMP_WIRE - (int) TMP_WIRE) * 100)));
+    	 sprintf(output,"%d.%02u", (int) TMP_Output, (int) fabs(((TMP_Output - (int) TMP_Output ) * 100)));
     	 HAL_UART_Transmit(&huart2,output,sizeof(output),10);
 
     	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Potentiometer reading: ",sizeof("\r\n Potentiometer reading: "),10);
     	 sprintf(output,"%d.%02u", (int) pot_reading, (int) fabs(((pot_reading - (int) pot_reading ) * 100)));
     	 HAL_UART_Transmit(&huart2,output,sizeof(output),10);
 
-    	 //float CCR = TIM14->CCR1;
-    	 //float duty_cycle = (CCR/POT_MAX_READING)*100;
-    	 sprintf(output,"%d.%02u", (int) duty_cycle_global, (int) fabs(((duty_cycle_global - (int) duty_cycle_global) * 100)));
+    	 sprintf(output,"%d.%02u", (int) duty_cycle_global, (int) fabs(((duty_cycle_global - (int) duty_cycle_global ) * 100)));
     	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Current duty cycle: ",sizeof("\r\n Current duty cycle: "),10);
     	 HAL_UART_Transmit(&huart2,output,sizeof(output),10);
 
@@ -926,81 +895,37 @@ void UART_output(){
     	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Current Temp: ",sizeof("\r\n Current Temp: "),10);
     	 HAL_UART_Transmit(&huart2,output,sizeof(output),10);
 
-    	 char Power_on[]	= 	"Power On";
-    	 char Initialise[]	= 	"Initialising";
-    	 char Initialised[] =	"Initialised";
-    	 char Settle[]		= 	"Settling State";
-    	 char SS[]			= 	"Steady-State";
-    	 char cutting[]		= 	"Cutting";
-    	 char cooldown[]	= 	"Cooldown";
-    	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Current State: ",sizeof("\r\n Current State: "),10);
+    	 char Power_on[]	= "Power On";
+    	 char Initialise[]	= "Initialise";
+    	 char Settle[]		= "Settling State";
+    	 char SS[]			= "Steady-State";
+    	 char cutting[]		= "Cutting";
+    	 char cooldown[]	= "Cooldown";
+    	 HAL_UART_Transmit(&huart2,"\r\n Current State: ",sizeof("\r\n Current State: "),10);
     	 switch(current_state){
     	 case POWER_ON:
-    		 HAL_UART_Transmit(&huart2,(uint8_t *)Power_on,sizeof(Power_on),10);
+    		 HAL_UART_Transmit(&huart2,Power_on,sizeof(Power_on),10);
     		 break;
-    	 case INITIALISING:
-    		 HAL_UART_Transmit(&huart2,(uint8_t *)Initialise,sizeof(Initialise),10);
+    	 case INITIALISE:
+    		 HAL_UART_Transmit(&huart2,Initialise,sizeof(Initialise),10);
     		 break;
-    	 case INITIALISED:
-    	     HAL_UART_Transmit(&huart2,(uint8_t *)Initialised,sizeof(Initialised),10);
-    	     break;
     	 case SETTLING_STATE:
-    		 HAL_UART_Transmit(&huart2,(uint8_t *)Settle,sizeof(Settle),10);
+    		 HAL_UART_Transmit(&huart2,Settle,sizeof(Settle),10);
     		 break;
     	 case STEADY_STATE:
-    		 HAL_UART_Transmit(&huart2,(uint8_t *)SS,sizeof(SS),10);
+    		 HAL_UART_Transmit(&huart2,SS,sizeof(SS),10);
     		 break;
     	 case CUTTING:
-    		 HAL_UART_Transmit(&huart2,(uint8_t *)cutting,sizeof(cutting),10);
+    		 HAL_UART_Transmit(&huart2,cutting,sizeof(cutting),10);
     		 break;
     	 case COOLDOWN:
-    		 HAL_UART_Transmit(&huart2,(uint8_t *)cooldown,sizeof(cooldown),10);
+    		 HAL_UART_Transmit(&huart2,cooldown,sizeof(cooldown),10);
     		 break;
     	 }
 
 
-    	 //HAL_Delay(1000);//TODO remove this in actual application
+    	 HAL_Delay(1000);//TODO remove this in actual application
     }
-
-void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
-{
-   UART_output();
-}
-
-/**
- * @brief function called when interrupt triggered on rising edge
- * @param GPIO pin on which interrupt occurred
- */
-void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin){
-
-	switch(GPIO_Pin){
-	case PB2:
-		if (current_state = INITIALISED){
-			current_state = SETTLING_STATE;
-		}else if(current_state = INITIALISING){
-			HAL_UART_Transmit(&huart2,(uint8_t *)"Please wait" ,sizeof("Please wait"),10);
-			startup_initialisation();
-		}else{
-			current_state = CUTTING;
-		}
-		break;
-	case PB1:
-		current_state = INITIALISING;
-		set_PWM_driveFET(0);//stop wire conducting
-		HAL_UART_Transmit(&huart2,(uint8_t *)"Heating Stopped" ,sizeof("Heating Stopped"),10);
-		break;
-	}
-}
-
-/**
- * Function called when buffer allocated to ADC connected to potentiometer full
- */
-void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc){
-        // Read & Update The ADC Result
-    	//TIM14->CCR1 = pot_reading;
-    	temp_setpoint=pot_temp();
-		//temp_setpoint = pot_reading * scaling;
-	}
 
 /**
  * @brief convert given duty cycle fraction into correct CRR/ARR ratio and writes to the CCR1 register of TIM14
@@ -1022,11 +947,41 @@ void set_PWM_driveFET(float duty_cycle){
     	duty_cycle_global = duty_cycle;
     }
 
+
+/**
+ * @brief function called when interrupt triggered on rising edge
+ * @param GPIO pin on which interrupt occurred
+ */
+void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin){
+
+	switch(GPIO_Pin){
+	case PB2:
+
+		HAL_UART_Transmit(&huart2,"\r\n HERE",sizeof("\r\n HERE"),10);
+		HAL_GPIO_TogglePin(GPIOC, GREEN_LED);
+		break;
+	case PB1:
+		HAL_UART_Transmit(&huart2,"\r\n NOT",sizeof("\r\n NOT"),10);
+		break;
+	}
+}
+
+/**
+ * Function called when buffer allocated to ADC connected to potentiometer full
+ */
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc){
+        // Read & Update The ADC Result
+    	//TIM14->CCR1 = pot_reading;
+    	temp_setpoint=pot_temp();
+		//temp_setpoint = pot_reading * scaling;
+	}
+
+
 /**
  * @brief PID controller used when system not in contact with ice, has slower response time ideal for intial heat up
  * to set point temperature
  * @param
- * @retval; duty cycle to be applied to drive_FET circuit: float duty_cycle
+ * @retva; duty cycle to be applied to drive_FET circuit: float duty_cycle
  */
 void warm_up_controller(){
 	float wire_temp = wire_temp_calc();
@@ -1043,7 +998,7 @@ void warm_up_controller(){
  * @brief PID controller with faster response time, for when system in first contacts ice and when ice
  * removed to stop sharp temp increase
  * @param
- * @retval; duty cycle to be applied to drive_FET circuit: float duty_cycle
+ * @retva; duty cycle to be applied to drive_FET circuit: float duty_cycle
  */
 void cutting_controller(){
 	float wire_temp = wire_temp_calc();
@@ -1052,27 +1007,9 @@ void cutting_controller(){
 	integral = integral + error;
 	derivative = error - prev_error;
 
-	float duty_cycle = (Kp_cutting * error) + (Ki_cutting * integral) + (Kd_cutting * derivative);
+	float duty_cycle = (Kp_fast * error) + (Ki_fast * integral) + (Kd_fast * derivative);
 	prev_error = error;
-	set_PWM_driveFET(duty_cycle);
-}
-
-/**
- * @brief PID controller with faster response time, for when ice removed from nickel wire
- * removed to stop sharp temp increase
- * @param
- * @retval; duty cycle to be applied to drive_FET circuit: float duty_cycle
- */
-void cooling_controller(){
-	float wire_temp = wire_temp_calc();
-	float error = temp_setpoint - wire_temp;
-
-	integral = integral + error;
-	derivative = error - prev_error;
-
-	float duty_cycle = (Kp_cooling * error) + (Ki_cooling * integral) + (Kd_cooling * derivative);
-	prev_error = error;
-	set_PWM_driveFET(duty_cycle);
+	return duty_cycle;
 }
 
 
@@ -1101,9 +1038,7 @@ void state_estimate(){
     float diff_wire_temp = wire_temp_global - prev_wire_temp_global;
 
     switch(current_state){
-    case INITIALISING:
-    	break;
-    case INITIALISED:
+    case INITIALISE:
     	break;
     case SETTLING_STATE://non-steady state, includes warm-up time and oscillations prior to steady state
     	if(diff_wire_temp>WARM_UP_THRESHOLD){
@@ -1123,15 +1058,15 @@ void state_estimate(){
     	    current_state = CUTTING;
     	}
     	break;
-    case CUTTING://for when temp plummets and being sapped away by ice during cutting
+    case CUTTING:
     	if(diff_wire_temp > WARM_UP_THRESHOLD && diff_wire_temp < ICE_REMOVED_THRESHOLD){ //wire re-heated to set point
     		current_state = CUTTING;
     	}else if(diff_wire_temp > ICE_REMOVED_THRESHOLD){//wire temp spiked above threshold when ice removed
     		current_state = COOLDOWN;
     	}
     	break;
-    case COOLDOWN://for when temp spikes after ice removed
-    	if(wire_temp_global <=  temp_setpoint && diff_wire_temp >=0){
+    case COOLDOWN:
+    	if(wire_temp_global < temp_setpoint && diff_wire_temp >=0){
     		//wire temp decreased below setpoint temp so not too hot
     		//wire temp beginning to increase again, so aggressive controller used to partially return system to steady state
     		current_state = SETTLING_STATE;
@@ -1145,6 +1080,7 @@ void state_estimate(){
     	current_state = UNKNOWN_STATE;
     	set_PWM_driveFET(0);
     	startup_initialisation();
+    	break;
     }
 }
 
