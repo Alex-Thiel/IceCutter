@@ -60,8 +60,8 @@ all: main-build
 main-build: IceCutterTesting.elf secondary-outputs
 
 # Tool invocations
-IceCutterTesting.elf IceCutterTesting.map: $(OBJS) $(USER_OBJS) C:\Users\Thiel\STM32CubeIDE\workspace_1.10.1\IceCutterTesting\STM32G030F6PX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "IceCutterTesting.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m0plus -T"C:\Users\Thiel\STM32CubeIDE\workspace_1.10.1\IceCutterTesting\STM32G030F6PX_FLASH.ld" --specs=nosys.specs -Wl,-Map="IceCutterTesting.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+IceCutterTesting.elf IceCutterTesting.map: $(OBJS) $(USER_OBJS) C:\Users\Thiel\Documents\Varsity\4th\ Year\Second\ Semester\icecutter\IceCutterTesting\STM32G030F6PX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "IceCutterTesting.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m0plus -T"C:\Users\Thiel\Documents\Varsity\4th Year\Second Semester\icecutter\IceCutterTesting\STM32G030F6PX_FLASH.ld" --specs=nosys.specs -Wl,-Map="IceCutterTesting.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
