@@ -88,9 +88,9 @@ UART_HandleTypeDef huart2;
 #define SS_FET_state	GPIOB
 #define DRIVE_FET 		GPIO_PIN_4
 #define DRIVE_FET_state	GPIOA
-#define PB2 			GPIO_PIN_8
+#define SW2 			GPIO_PIN_8
 #define PB2_state		GPIOC
-#define PB1 			GPIO_PIN_0
+#define SW1 			GPIO_PIN_0
 #define PB1_state		GPIOA
 
 #define POWER_ON		0
@@ -114,17 +114,21 @@ UART_HandleTypeDef huart2;
 #define POT_MAX_READING 4095.0 //=4095
 #define DUTY_CYCLE_MAX 1
 
-#define Ki_slow 0
-#define Kp_slow 0
-#define Kd_slow 0
+#define Ki_warming 0
+#define Kp_warming 0
+#define Kd_warming 0
 float integral = 0;
 float derivative = 0;
 float prev_error = 0;
 
 
-#define Ki_fast 0
-#define Kp_fast 0
-#define Kd_fast 0
+#define Ki_cutting 0
+#define Kp_cutting 0
+#define Kd_cutting 0
+
+#define Ki_cooling 0
+#define Kp_cooling 0
+#define Kd_cooling 0
 
 uint16_t duty_cycle_global;
 uint8_t current_state;
@@ -138,11 +142,6 @@ float TMP_Output;
 float TMP_Ambient;
 float current_input;
 float current_output;
-
-
-//uint16_t buffer[];
-
-
 
 /* USER CODE END PV */
 
@@ -845,6 +844,7 @@ static void MX_GPIO_Init(void)
 	   HAL_GPIO_WritePin(GPIOB,SS_FET, GPIO_PIN_SET);//allow SS_FET to conduct to keep caps charged
 	   HAL_GPIO_WritePin(GPIOC, GREEN_LED, GPIO_PIN_SET); // green LED2 turn on, system ready to cut
 	   current_state = INITIALISED;
+	   UART_output();
  }
 
 
@@ -857,7 +857,7 @@ void UART_output(){
     	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Output current: ",sizeof("\r\n Output current: "),10);
 
     	 uint8_t output[7];
-    	 sprintf(output,"%d.%02u", (int) current_output, (int) fabs(((current_output - (int) current_outputrrent ) * 100)));
+    	 sprintf(output,"%d.%02u", (int) current_output, (int) fabs(((current_output - (int) current_output) * 100)));
     	 HAL_UART_Transmit(&huart2,output,sizeof(output),10);
 
     	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Input current: ",sizeof("\r\n Input current: "),10);
@@ -895,31 +895,35 @@ void UART_output(){
     	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Current Temp: ",sizeof("\r\n Current Temp: "),10);
     	 HAL_UART_Transmit(&huart2,output,sizeof(output),10);
 
-    	 char Power_on[]	= "Power On";
-    	 char Initialise[]	= "Initialise";
-    	 char Settle[]		= "Settling State";
-    	 char SS[]			= "Steady-State";
-    	 char cutting[]		= "Cutting";
-    	 char cooldown[]	= "Cooldown";
-    	 HAL_UART_Transmit(&huart2,"\r\n Current State: ",sizeof("\r\n Current State: "),10);
+    	 char Power_on[]	= 	"Power On";
+    	 char Initialise[]	= 	"Initialised";
+    	 char Init[]		= 	"Initialising";
+    	 char Settle[]		= 	"Settling State";
+    	 char SS[]			= 	"Steady-State";
+    	 char cutting[]		= 	"Cutting";
+    	 char cooldown[]	= 	"Cooldown";
+    	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Current State: ",sizeof("\r\n Current State: "),10);
     	 switch(current_state){
     	 case POWER_ON:
-    		 HAL_UART_Transmit(&huart2,Power_on,sizeof(Power_on),10);
+    		 HAL_UART_Transmit(&huart2,(uint8_t *)Power_on,sizeof(Power_on),10);
     		 break;
-    	 case INITIALISE:
-    		 HAL_UART_Transmit(&huart2,Initialise,sizeof(Initialise),10);
+    	 case INITIALISED:
+    		 HAL_UART_Transmit(&huart2,(uint8_t *)Initialise,sizeof(Initialise),10);
+    		 break;
+    	 case INITIALISING:
+    		 HAL_UART_Transmit(&huart2,(uint8_t *)Init,sizeof(Init),10);
     		 break;
     	 case SETTLING_STATE:
-    		 HAL_UART_Transmit(&huart2,Settle,sizeof(Settle),10);
+    		 HAL_UART_Transmit(&huart2,(uint8_t *)Settle,sizeof(Settle),10);
     		 break;
     	 case STEADY_STATE:
-    		 HAL_UART_Transmit(&huart2,SS,sizeof(SS),10);
+    		 HAL_UART_Transmit(&huart2,(uint8_t *)SS,sizeof(SS),10);
     		 break;
     	 case CUTTING:
-    		 HAL_UART_Transmit(&huart2,cutting,sizeof(cutting),10);
+    		 HAL_UART_Transmit(&huart2,(uint8_t *)cutting,sizeof(cutting),10);
     		 break;
     	 case COOLDOWN:
-    		 HAL_UART_Transmit(&huart2,cooldown,sizeof(cooldown),10);
+    		 HAL_UART_Transmit(&huart2,(uint8_t *)cooldown,sizeof(cooldown),10);
     		 break;
     	 }
 
@@ -955,15 +959,43 @@ void set_PWM_driveFET(float duty_cycle){
 void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin){
 
 	switch(GPIO_Pin){
-	case PB2:
-
-		HAL_UART_Transmit(&huart2,"\r\n HERE",sizeof("\r\n HERE"),10);
+	case SW2:
+		switch (current_state){
+		case INITIALISING:
+			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Please Wait",sizeof("\r\n Please Wait"),10);
+			startup_initialisation();
+			HAL_Delay(10);
+			break;
+		case INITIALISED:
+			current_state = SETTLING_STATE;
+			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Heating to Setpoint",sizeof("\r\n Heating to Setpoint"),10);
+			HAL_Delay(10);
+			break;
+		case SETTLING_STATE:
+			current_state = INITIALISING;
+			startup_initialisation();
+			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Heating turned off",sizeof("\r\n Heating turned off"),10);
+		case STEADY_STATE:
+			current_state = INITIALISING;
+			startup_initialisation();
+			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Heating turned off",sizeof("\r\n Heating turned off"),10);
+		}
+		HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n HERE",sizeof("\r\n HERE"),10);
 		HAL_GPIO_TogglePin(GPIOC, GREEN_LED);
 		break;
-	case PB1:
-		HAL_UART_Transmit(&huart2,"\r\n NOT",sizeof("\r\n NOT"),10);
+	case SW1:
+		switch (current_state){
+		case STEADY_STATE:
+			current_state = CUTTING;
+			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Ready to cut",sizeof("\r\n Ready to cut"),10);
+			HAL_Delay(10);
+		case CUTTING:
+			current_state = COOLDOWN;
+		}
+		HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n NOT",sizeof("\r\n NOT"),10);
 		break;
 	}
+	UART_output();
 }
 
 /**
@@ -990,7 +1022,7 @@ void warm_up_controller(){
 	integral = integral + error;
 	derivative = error - prev_error;
 
-	float duty_cycle = (Kp_slow * error) + (Ki_slow*integral) + (Kd_slow*derivative);
+	float duty_cycle = (Kp_warming * error) + (Ki_warming*integral) + (Kd_warming*derivative);
 	prev_error = error;
 	set_PWM_driveFET(duty_cycle);
 }
@@ -1007,7 +1039,25 @@ void cutting_controller(){
 	integral = integral + error;
 	derivative = error - prev_error;
 
-	float duty_cycle = (Kp_fast * error) + (Ki_fast * integral) + (Kd_fast * derivative);
+	float duty_cycle = (Kp_cutting * error) + (Ki_cutting * integral) + (Kd_cutting * derivative);
+	prev_error = error;
+	return duty_cycle;
+}
+
+/**
+ * @brief PID controller with faster response time, for when temp spikes after ice removed
+ * removed to stop sharp temp increase
+ * @param
+ * @retva; duty cycle to be applied to drive_FET circuit: float duty_cycle
+ */
+void cooling_controller(){
+	float wire_temp = wire_temp_calc();
+	float error = temp_setpoint - wire_temp;
+
+	integral = integral + error;
+	derivative = error - prev_error;
+
+	float duty_cycle = (Kp_cooling * error) + (Ki_cooling * integral) + (Kd_cooling * derivative);
 	prev_error = error;
 	return duty_cycle;
 }
@@ -1038,7 +1088,9 @@ void state_estimate(){
     float diff_wire_temp = wire_temp_global - prev_wire_temp_global;
 
     switch(current_state){
-    case INITIALISE:
+    case INITIALISING:
+    	break;
+    case INITIALISED:
     	break;
     case SETTLING_STATE://non-steady state, includes warm-up time and oscillations prior to steady state
     	if(diff_wire_temp>WARM_UP_THRESHOLD){
@@ -1058,14 +1110,14 @@ void state_estimate(){
     	    current_state = CUTTING;
     	}
     	break;
-    case CUTTING:
+    case CUTTING://when ice applied, temp drops need aggressive controller to compensate for drop and heat transfer
     	if(diff_wire_temp > WARM_UP_THRESHOLD && diff_wire_temp < ICE_REMOVED_THRESHOLD){ //wire re-heated to set point
     		current_state = CUTTING;
     	}else if(diff_wire_temp > ICE_REMOVED_THRESHOLD){//wire temp spiked above threshold when ice removed
     		current_state = COOLDOWN;
     	}
     	break;
-    case COOLDOWN:
+    case COOLDOWN://when ice removed temp spikes so need more aggressive controller
     	if(wire_temp_global < temp_setpoint && diff_wire_temp >=0){
     		//wire temp decreased below setpoint temp so not too hot
     		//wire temp beginning to increase again, so aggressive controller used to partially return system to steady state
