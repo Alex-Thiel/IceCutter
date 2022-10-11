@@ -178,6 +178,10 @@ void UART_output();
 void set_PWM_driveFET(float duty_cycle);
 double fabs(double x);
 uint16_t pot_temp();
+void warm_up_controller();
+void cutting_controller();
+void cooling_controller();
+void state_estimate();
 
 /* USER CODE END 0 */
 
@@ -233,15 +237,47 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+	  HAL_ADC_Start_DMA (&hadc1, &pot_reading, 1);
+	  state_estimate();
+	  switch (current_state){
+	  case POWER_ON:
+		  startup_initialisation();
+		  break;
+	  case INITIALISING:
+		  startup_initialisation();
+		  break;
+	  case INITIALISED:
+		  //waiting for button press
+		  HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Press SW2 to heat",sizeof("\r\n Press SW2 to heat"),10);
+		  break;
+	  case SETTLING_STATE:
+		  warm_up_controller();
+		  break;
+	  case STEADY_STATE:
+		  HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Wire @ temp",sizeof("\r\n Wire @ temp"),10);
+		  warm_up_controller();
+		  break;
+	  case CUTTING:
+		  cutting_controller();
+		  break;
+	  case COOLDOWN:
+		  cooling_controller();
+		  break;
+	  case UNKNOWN_STATE:
+		  startup_initialisation();
+		  break;
+	  }
+	  UART_output();
+
 
 	  //HAL_ADC_Start(&hadc1);
 	  //HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
 	  //HAL_ADC_Start_IT(&hadc1);
-	  HAL_ADC_Start_DMA (&hadc1, &pot_reading, 1);
+
 	  //set_PWM_driveFET(1);
-	  HAL_GPIO_TogglePin(GPIOB, RED_LED);
-	  UART_output();
-	  HAL_GPIO_TogglePin(GPIOB, RED_LED);
+	  //HAL_GPIO_TogglePin(GPIOB, RED_LED);
+	  //UART_output();
+	  // HAL_GPIO_TogglePin(GPIOB, RED_LED);
 	  //set_PWM_driveFET(0);
 
 
@@ -961,66 +997,6 @@ void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin){
 	switch(GPIO_Pin){
 	case SW1:
 		switch (current_state){
-			case STEADY_STATE:
-				current_state = CUTTING;
-				HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Ready to cut",sizeof("\r\n Ready to cut"),10);
-				HAL_Delay(10);
-			case CUTTING:
-				current_state = COOLDOWN;
-		}
-		HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n NOT",sizeof("\r\n NOT"),10);
-		break;
-	case SW2:
-		switch (current_state){
-			case INITIALISING:
-				HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Please Wait",sizeof("\r\n Please Wait"),10);
-				startup_initialisation();
-				HAL_Delay(10);
-				break;
-			case INITIALISED:
-				current_state = SETTLING_STATE;
-				HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Heating to Setpoint",sizeof("\r\n Heating to Setpoint"),10);
-				HAL_Delay(10);
-				break;
-			case SETTLING_STATE:
-				current_state = INITIALISING;
-				startup_initialisation();
-				HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Heating turned off",sizeof("\r\n Heating turned off"),10);
-			case STEADY_STATE:
-				current_state = INITIALISING;
-				startup_initialisation();
-				HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Heating turned off",sizeof("\r\n Heating turned off"),10);
-		}
-		HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n HERE",sizeof("\r\n HERE"),10);
-		break;
-	}
-	/*switch(GPIO_Pin){
-	case SW2:
-		switch (current_state){
-		case INITIALISING:
-			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Please Wait",sizeof("\r\n Please Wait"),10);
-			startup_initialisation();
-			HAL_Delay(10);
-			break;
-		case INITIALISED:
-			current_state = SETTLING_STATE;
-			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Heating to Setpoint",sizeof("\r\n Heating to Setpoint"),10);
-			HAL_Delay(10);
-			break;
-		case SETTLING_STATE:
-			current_state = INITIALISING;
-			startup_initialisation();
-			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Heating turned off",sizeof("\r\n Heating turned off"),10);
-		case STEADY_STATE:
-			current_state = INITIALISING;
-			startup_initialisation();
-			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Heating turned off",sizeof("\r\n Heating turned off"),10);
-		}
-		HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n HERE",sizeof("\r\n HERE"),10);
-		HAL_GPIO_TogglePin(GPIOC, GREEN_LED);
-		break;
-	case SW1:
-		switch (current_state){
 		case STEADY_STATE:
 			current_state = CUTTING;
 			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Ready to cut",sizeof("\r\n Ready to cut"),10);
@@ -1030,8 +1006,33 @@ void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin){
 		}
 		HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n NOT",sizeof("\r\n NOT"),10);
 		break;
+	case SW2:
+		switch (current_state){
+		case POWER_ON:
+			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Please Wait",sizeof("\r\n Please Wait"),10);
+			current_state = POWER_ON;
+			HAL_Delay(10);
+			break;
+		case INITIALISING:
+			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Please Wait",sizeof("\r\n Please Wait"),10);
+			current_state=INITIALISING;
+			HAL_Delay(10);
+			break;
+		case INITIALISED:
+			current_state = SETTLING_STATE;
+			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Heating to Setpoint",sizeof("\r\n Heating to Setpoint"),10);
+			HAL_Delay(10);
+			break;
+		case SETTLING_STATE:
+			current_state = INITIALISING;
+			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Heating turned off",sizeof("\r\n Heating turned off"),10);
+		case STEADY_STATE:
+			current_state = INITIALISING;
+			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Heating turned off",sizeof("\r\n Heating turned off"),10);
+		}
+		HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n HERE",sizeof("\r\n HERE"),10);
+		break;
 	}
-	*/
 }
 
 /**
@@ -1077,7 +1078,7 @@ void cutting_controller(){
 
 	float duty_cycle = (Kp_cutting * error) + (Ki_cutting * integral) + (Kd_cutting * derivative);
 	prev_error = error;
-	return duty_cycle;
+	set_PWM_driveFET(duty_cycle);
 }
 
 /**
@@ -1095,7 +1096,7 @@ void cooling_controller(){
 
 	float duty_cycle = (Kp_cooling * error) + (Ki_cooling * integral) + (Kd_cooling * derivative);
 	prev_error = error;
-	return duty_cycle;
+	set_PWM_driveFET(duty_cycle);
 }
 
 
