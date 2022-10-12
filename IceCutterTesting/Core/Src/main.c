@@ -88,9 +88,9 @@ UART_HandleTypeDef huart2;
 #define SS_FET_state	GPIOB
 #define DRIVE_FET 		GPIO_PIN_4
 #define DRIVE_FET_state	GPIOA
-#define SW2 			GPIO_PIN_8
-#define SW2_state		GPIOC
-#define SW1 			GPIO_PIN_0
+#define SW2 			GPIO_PIN_6
+#define SW2_state		GPIOA
+#define SW1 			GPIO_PIN_7
 #define SW1_state		GPIOA
 
 #define POWER_ON		0
@@ -111,7 +111,7 @@ UART_HandleTypeDef huart2;
 #define IN_THRESHOLD 	1
 
 #define MAX_ALLOWED_TEMP 1446.0 //0x5A6 = 1446 = Nickel Melting temp
-#define POT_MAX_READING 4095.0 //=4095
+#define POT_MAX_READING 4095.0
 #define DUTY_CYCLE_MAX 1
 
 #define Ki_warming 0
@@ -610,25 +610,16 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOA_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9|GPIO_PIN_0, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_15, GPIO_PIN_SET);
 
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
-
-  /*Configure GPIO pin : PB8 */
-  GPIO_InitStruct.Pin = GPIO_PIN_8;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
   /*Configure GPIO pin : PB9 */
   GPIO_InitStruct.Pin = GPIO_PIN_9;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /*Configure GPIO pin : PC15 */
@@ -638,9 +629,15 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PA0 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  /*Configure GPIO pin : PA5 */
+  GPIO_InitStruct.Pin = GPIO_PIN_5;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PA6 PA7 */
+  GPIO_InitStruct.Pin = GPIO_PIN_6|GPIO_PIN_7;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
@@ -651,10 +648,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI0_1_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI0_1_IRQn);
+  /**/
+  __HAL_SYSCFG_FASTMODEPLUS_ENABLE(SYSCFG_FASTMODEPLUS_PB9);
 
+  /* EXTI interrupt init*/
   HAL_NVIC_SetPriority(EXTI4_15_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(EXTI4_15_IRQn);
 
@@ -1132,7 +1129,7 @@ void state_estimate(){
     case SETTLING_STATE://non-steady state, includes warm-up time and oscillations prior to steady state
     	if(diff_wire_temp>WARM_UP_THRESHOLD){
     		current_state = SETTLING_STATE;
-    	}else if(diff_wire_temp < WARM_UP_THRESHOLD){ //wire heated to set point
+    	}else if(fabs(wire_temp_global-temp_setpoint) < WARM_UP_THRESHOLD){ //wire heated to set point
     	    current_state = STEADY_STATE;
     	}else if(diff_wire_temp < CUTTING_THRESHOLD){ //wire temp decreased  more than threshold
     	    current_state = CUTTING;
