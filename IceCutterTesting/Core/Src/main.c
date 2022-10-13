@@ -59,11 +59,11 @@ UART_HandleTypeDef huart2;
 #define INA_POWER_REG 		0x03
 #define INA_CURRENT_REG  	0x04
 #define INA_CALIB_REG  		0x05
-#define INA_CAL  			0x1BC
-#define INA_CURRENT_LSB 	3E-5
-#define INA_POWER_LSB 		0.008 //current_LSB *20
+#define INA_CAL  			0x7482
+#define INA_CURRENT_LSB 	0.001831055
+#define INA_POWER_LSB 		0.036621094 //current_LSB *20
 #define INA_CONFIG_VALUE 	0x299F //sets PGA =2
-#define MAX_INRUSH_CURRENT 	55
+#define MAX_INRUSH_CURRENT 	59
 
 #define TMP_TEMP_REG  		0x00
 #define TMP_LSB  			0.0078125 //set from datasheet
@@ -75,9 +75,10 @@ UART_HandleTypeDef huart2;
 #define TEMP_LIMIT_WIRE 	0x50 //80C
 #define TEMP_LIMIT_INPUT 	0x50 //80C
 
-#define NICKEL_TCR 			0.0059
-#define R_REF 				0.027474
-#define T_REF 				21.973025
+#define COPPER_TCR			0.00393//0.004
+#define NICKEL_TCR 			0.0059//0.005671
+#define R_REF_NICKEL 		0.027474
+#define T_REF_NICKEL 		21.973025
 #define SUPPLY_VOLTAGE 		5
 
 #define RED_LED 		GPIO_PIN_9
@@ -225,7 +226,6 @@ int main(void)
   HAL_TIM_PWM_Start(&htim14, TIM_CHANNEL_1);
   //current_state = POWER_ON;
   //startup_initialisation();
-  HAL_GPIO_WritePin(GPIOB, RED_LED, GPIO_PIN_SET);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -238,6 +238,12 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 	  HAL_ADC_Start_DMA (&hadc1, &pot_reading, 1);
+	  /*ina_initialise(0x40);
+	  write_to_reg_unspecified(0x40, INA_CAL);
+
+	  //write_to_register(0x40, INA_CONFIG_REG, 0x15D9);
+	  uint16_t read = read_register(0x40, INA_CALIB_REG);*/
+
 	  state_estimate();
 	  switch (current_state){
 	  case POWER_ON:
@@ -252,16 +258,24 @@ int main(void)
 		  break;
 	  case SETTLING_STATE:
 		  warm_up_controller();
+		  HAL_GPIO_TogglePin(RED_LED_state, RED_LED);
+		  HAL_GPIO_TogglePin(GREEN_LED_state, GREEN_LED);
 		  break;
 	  case STEADY_STATE:
 		  HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Wire @ temp",sizeof("\r\n Wire @ temp"),10);
 		  warm_up_controller();
+		  HAL_GPIO_TogglePin(RED_LED_state, RED_LED);
+		  HAL_GPIO_TogglePin(GREEN_LED_state, GREEN_LED);
 		  break;
 	  case CUTTING:
 		  cutting_controller();
+		  HAL_GPIO_TogglePin(RED_LED_state, RED_LED);
+		  HAL_GPIO_TogglePin(GREEN_LED_state, GREEN_LED);
 		  break;
 	  case COOLDOWN:
 		  cooling_controller();
+		  HAL_GPIO_TogglePin(RED_LED_state, RED_LED);
+		  HAL_GPIO_TogglePin(GREEN_LED_state, GREEN_LED);
 		  break;
 	  case UNKNOWN_STATE:
 		  startup_initialisation();
@@ -615,9 +629,9 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_15, GPIO_PIN_SET);
 
-  /*Configure GPIO pin : PB9 */
-  GPIO_InitStruct.Pin = GPIO_PIN_9;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+  /*Configure GPIO pins : PB9 PB0 */
+  GPIO_InitStruct.Pin = GPIO_PIN_9|GPIO_PIN_0;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
@@ -640,13 +654,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : PB0 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /**/
   __HAL_SYSCFG_FASTMODEPLUS_ENABLE(SYSCFG_FASTMODEPLUS_PB9);
@@ -680,9 +687,11 @@ static void MX_GPIO_Init(void)
      uint16_t register_value_swapped = swap_endian(register_value);
      HAL_I2C_Mem_Write(&hi2c2,(device_address<<1),register_pointer,1,&register_value_swapped,2,50);
      /* Check the communication status */
-     if(status != HAL_OK)
-     {
-         // Error handling, for example re-initialization of the I2C peripheral
+     if(status != HAL_OK){
+    	 MX_I2C2_Init();
+    	 HAL_Delay(100);
+    	 HAL_I2C_Mem_Write(&hi2c2,(device_address<<1),register_pointer,1,&register_value_swapped,2,50);
+    	 // Error handling, for example re-initialization of the I2C peripheral
      }
  }
 
@@ -698,12 +707,26 @@ static void MX_GPIO_Init(void)
 
      HAL_I2C_Mem_Read(&hi2c2,(device_address<<1),register_pointer,1,&register_value_return,2,500);
      /* Check the communication status */
+     if(status != HAL_OK){
+         	 MX_I2C2_Init();
+         	 HAL_Delay(100);
+         	 HAL_I2C_Mem_Read(&hi2c2,(device_address<<1),register_pointer,1,&register_value_return,2,500);
+         	 // Error handling, for example re-initialization of the I2C peripheral
+     }
+     register_value_return = swap_endian(register_value_return);
+     return register_value_return;
+ }
+
+ void write_to_reg_unspecified(uint8_t device_address, uint16_t register_value)
+ {
+     HAL_StatusTypeDef status = HAL_OK;
+     uint16_t register_value_swapped = swap_endian(register_value);
+     HAL_I2C_Master_Transmit(&hi2c2,(device_address<<1),&register_value_swapped,I2C_MEMADD_SIZE_16BIT,50);
+     /* Check the communication status */
      if(status != HAL_OK)
      {
          // Error handling, for example re-initialization of the I2C peripheral
      }
-     register_value_return = swap_endian(register_value_return);
-     return register_value_return;
  }
 
  /**
@@ -739,8 +762,8 @@ static void MX_GPIO_Init(void)
  */
  float measure_current(uint8_t device_address)
  {
-	   int temp = read_register(device_address,INA_CURRENT_REG);
-	   float current = INA_CURRENT_LSB*temp;
+	   int current_reg = read_register(device_address,INA_CURRENT_REG);
+	   float current = INA_CURRENT_LSB*current_reg;
 
 	   switch (device_address){
 	   case WIRE_INA219:
@@ -772,9 +795,9 @@ static void MX_GPIO_Init(void)
  float wire_temp_calc(){
 	   float wire_current = measure_current(WIRE_INA219);
 	   float wire_resistance = SUPPLY_VOLTAGE/wire_current;
-	   float temp = wire_resistance/(R_REF*NICKEL_TCR);
+	   float temp = wire_resistance/(R_REF_NICKEL*NICKEL_TCR);
 	   temp = temp - (1/NICKEL_TCR);
-	   temp = temp + T_REF;
+	   temp = temp + T_REF_NICKEL;
 	   prev_wire_temp_global = wire_temp_global;
 	   wire_temp_global = temp;
 	   return temp;
@@ -796,7 +819,7 @@ static void MX_GPIO_Init(void)
      * @param
      * @retval 1 if all below limit 0 if at least one above limit
  */
- uint8_t temp_checks(){
+ uint8_t temp_checks(){//TODO may need to convert to difference from ambient
 	   float temp_ambient 	= get_temp_TMP117(TMP_ADD_AMBIENT);//get temp from TNMP117 in open air
 	   float temp_input		= get_temp_TMP117(TMP_ADD_INPUT);//get temp from TMP117 near input
 	   float temp_element 	= get_temp_TMP117(TMP_ADD_WIRE);//get temp from TMP117 near wire element
@@ -817,27 +840,28 @@ static void MX_GPIO_Init(void)
  */
  void SS_charge(){
 	 uint8_t counter = 0;
-	   HAL_GPIO_WritePin(GPIOB,SS_FET,GPIO_PIN_RESET);
-	   while(HAL_GPIO_ReadPin(GPIOB,SS_FET) == GPIO_PIN_RESET){
-		   float input_current = measure_current(INPUT_INA219);
-		   if(input_current >= MAX_INRUSH_CURRENT){
-			   HAL_GPIO_WritePin(GPIOB,SS_FET, GPIO_PIN_SET); //stop charging caps
-			   counter = counter +1;
-			   HAL_GPIO_WritePin(GPIOB,SS_FET, GPIO_PIN_RESET); //stop charging caps
-		   }else if(input_current >= MAX_INRUSH_CURRENT && counter >=1){
-			   HAL_GPIO_WritePin(GPIOB,SS_FET, GPIO_PIN_SET); //stop charging caps
-			   pulse_charge_SS();
-		   }else if(temp_checks() == ABOVE_THRESHOLD){
-			   HAL_GPIO_WritePin(GPIOB,SS_FET, GPIO_PIN_SET); //stop charging caps
-			   while(temp_checks()==ABOVE_THRESHOLD){
-				   HAL_Delay(100); //allow time for board to cool
-			   }
-			   HAL_GPIO_WritePin(GPIOB,SS_FET,GPIO_PIN_RESET);
-		   }else if(measure_current(INPUT_INA219)==0){//capacitors fully charged, no current flow
-			   HAL_GPIO_WritePin(GPIOB,SS_FET, GPIO_PIN_SET);//stop soft start circuit charging caps
-			   break;
-		   }
-		   UART_output();
+	 HAL_GPIO_WritePin(GPIOB,SS_FET,GPIO_PIN_RESET);
+	 while(HAL_GPIO_ReadPin(GPIOB,SS_FET) == GPIO_PIN_RESET){
+		 float input_current = measure_current(INPUT_INA219);
+		 if(input_current >= MAX_INRUSH_CURRENT && counter == 0){
+			 HAL_GPIO_WritePin(GPIOB,SS_FET, GPIO_PIN_SET); //stop charging caps
+			 counter = counter + 1;
+			 HAL_GPIO_WritePin(GPIOB,SS_FET, GPIO_PIN_RESET); //stop charging caps
+		 }else if(input_current >= MAX_INRUSH_CURRENT && counter >=1){
+			 HAL_GPIO_WritePin(GPIOB,SS_FET, GPIO_PIN_SET); //stop charging caps
+			 counter = counter + 1;
+			 pulse_charge_SS();
+		 }else if(temp_checks() == ABOVE_THRESHOLD){
+			 HAL_GPIO_WritePin(GPIOB,SS_FET, GPIO_PIN_SET); //stop charging caps
+			 while(temp_checks()==ABOVE_THRESHOLD){
+				 HAL_Delay(100); //allow time for board to cool
+			 }
+			 HAL_GPIO_WritePin(GPIOB,SS_FET,GPIO_PIN_RESET);
+		 }else if(measure_current(INPUT_INA219)==0){//capacitors fully charged, no current flow
+			 HAL_GPIO_WritePin(GPIOB,SS_FET, GPIO_PIN_SET);//stop soft start circuit charging caps
+			 break;
+		 }
+		 UART_output();
 	   }
  }
 
@@ -862,6 +886,8 @@ static void MX_GPIO_Init(void)
       */
  void startup_initialisation(){
 	 	current_state = INITIALISING;
+	 	HAL_GPIO_WritePin(RED_LED_state, RED_LED, GPIO_PIN_SET);//turn on red led
+	 	HAL_GPIO_WritePin(GREEN_LED_state, GREEN_LED, GPIO_PIN_RESET);//turn off green led
 	 	set_PWM_driveFET(0);//ensure heating wire doesn't conduct
 		HAL_GPIO_WritePin(GPIOB,SS_FET,GPIO_PIN_SET); //keep SS_FET high, soft start stops Caps charging
 		ina_initialise(WIRE_INA219);//set config registers of INA219s
@@ -963,6 +989,13 @@ void UART_output(){
 
     	 HAL_Delay(1000);//TODO remove this in actual application
     }
+
+void UART_wire_temp(){
+	uint8_t output[7];
+	sprintf(output,"%d.%02u", (int) wire_temp_global, (int) fabs(((wire_temp_global - (int) wire_temp_global ) * 100)));
+	HAL_UART_Transmit(&huart2,output,sizeof(output),10);
+	HAL_UART_Transmit(&huart2, (uint8_t)"\r\n", sizeof("\r\n"), 10);
+}
 
 /**
  * @brief convert given duty cycle fraction into correct CRR/ARR ratio and writes to the CCR1 register of TIM14
