@@ -63,6 +63,7 @@ UART_HandleTypeDef huart2;
 #define INA_CURRENT_LSB 	0.001831055
 #define INA_POWER_LSB 		0.036621094 //current_LSB *20
 #define INA_CONFIG_VALUE 	0x299F //sets PGA =2
+#define INA_CONFIG_PGA_8	0x399F //set PGA = 8
 #define MAX_INRUSH_CURRENT 	59
 
 #define TMP_TEMP_REG  		0x00
@@ -241,11 +242,8 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 	  HAL_ADC_Start_DMA (&hadc1, &pot_reading, 1);
-	  /*ina_initialise(0x40);
-	  write_to_reg_unspecified(0x40, INA_CAL);
+	  ina_initialise(WIRE_INA219);
 
-	  //write_to_register(0x40, INA_CONFIG_REG, 0x15D9);
-	  uint16_t read = read_register(0x40, INA_CALIB_REG);*/
 	  if(temp_checks()==IN_THRESHOLD){
 		  monitor_input_current();
 		  wire_temp_calc();
@@ -781,10 +779,9 @@ static void MX_GPIO_Init(void)
 	   float wire_resistance = SUPPLY_VOLTAGE/wire_current;
 	   float temp = 0;
 	   if(CUTTER_TYPE==1){
-		   temp = T_REF_NICKEL-(R_REF_NICKEL-wire_resistance)/(R_REF_NICKEL*NICKEL_TCR*1000000);
-		   //temp = wire_resistance/(R_REF_NICKEL*3*NICKEL_TCR);
-		   //temp = temp - (1/NICKEL_TCR);
-		   //temp = temp + T_REF_NICKEL;
+		   temp = wire_resistance/(R_REF_NICKEL*3*NICKEL_TCR);//todo remove x3
+		   temp = temp - (1/NICKEL_TCR);
+		   temp = temp + T_REF_NICKEL;
 	   }else{
 		   temp = wire_resistance/(R_REF_COPPER*3*COPPER_TCR);
 		   temp = temp - (1/COPPER_TCR);
@@ -802,7 +799,7 @@ static void MX_GPIO_Init(void)
   */
  void ina_initialise(uint8_t device_address){
 	   write_to_register(device_address,INA_CALIB_REG, INA_CAL);
-	   //write_to_reg_specified(device_address, INA_CONFIG_REG, INA_CONFIG_VALUE);
+	   write_to_register(device_address, INA_CONFIG_REG, INA_CONFIG_PGA_8);
  }
 
 
@@ -912,11 +909,11 @@ void UART_output(){
 
     	 //uint8_t output_c = (((int) (current_output + 32768.5)) - 32768);
 
-    	 sprintf(output_current,"%d.%02u",((int) (current_output + 32768.5)) - 32768);
+    	 sprintf(output_current,"%d.%02u",(((int) (current_output + 32768.5)) - 32768));
     	 HAL_UART_Transmit(&huart2,output_current,sizeof(output_current),10);
 
     	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Input current: ",sizeof("\r\n Input current: "),10);
-    	 sprintf(output_current,"%d.%02u",((int) (current_input + 32768.5)) - 32768);
+    	 sprintf(output_current,"%d.%02u",((int) (current_input + 0.5)));
     	 HAL_UART_Transmit(&huart2,output_current,sizeof(output_current),10);
 
     	 //gcvt(ambient_temp,6,output);
@@ -1010,7 +1007,7 @@ void set_PWM_driveFET(float duty_cycle){
     		CRR = duty_cycle*POT_MAX_READING;
     	}
     	TIM14->CCR1 = CRR;
-    	duty_cycle_global = duty_cycle;
+    	duty_cycle_global = duty_cycle*100;
     }
 
 
@@ -1034,7 +1031,7 @@ void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin){
 		HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n NOT",sizeof("\r\n NOT"),10);*/
 		break;
 	case SW2:
-		set_PWM_driveFET(0.12);
+		set_PWM_driveFET(0.8);
 		/*switch (current_state){
 		case POWER_ON:
 			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Please Wait",sizeof("\r\n Please Wait"),10);
