@@ -79,6 +79,9 @@ UART_HandleTypeDef huart2;
 #define NICKEL_TCR 			0.0059//0.005671
 #define R_REF_NICKEL 		0.027474
 #define T_REF_NICKEL 		21.973025
+#define R_REF_COPPER		0
+#define T_REF_COPPER		0
+#define CUTTER_TYPE			1 //1=nickel 2 = copper
 #define SUPPLY_VOLTAGE 		5
 
 #define RED_LED 		GPIO_PIN_9
@@ -776,9 +779,17 @@ static void MX_GPIO_Init(void)
  float wire_temp_calc(){
 	   float wire_current = measure_current(WIRE_INA219);
 	   float wire_resistance = SUPPLY_VOLTAGE/wire_current;
-	   float temp = wire_resistance/(R_REF_NICKEL*3*NICKEL_TCR);
-	   temp = temp - (1/NICKEL_TCR);
-	   temp = temp + T_REF_NICKEL;
+	   float temp = 0;
+	   if(CUTTER_TYPE==1){
+		   temp = T_REF_NICKEL-(R_REF_NICKEL-wire_resistance)/(R_REF_NICKEL*NICKEL_TCR*1000000);
+		   //temp = wire_resistance/(R_REF_NICKEL*3*NICKEL_TCR);
+		   //temp = temp - (1/NICKEL_TCR);
+		   //temp = temp + T_REF_NICKEL;
+	   }else{
+		   temp = wire_resistance/(R_REF_COPPER*3*COPPER_TCR);
+		   temp = temp - (1/COPPER_TCR);
+		   temp = temp + T_REF_COPPER;
+	   }
 	   prev_wire_temp_global = wire_temp_global;
 	   wire_temp_global = temp;
 	   return temp;
@@ -897,14 +908,15 @@ void UART_output(){
     	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Output current: ",sizeof("\r\n Output current: "),10);
 
     	 uint8_t output[7];
-    	 uint8_t output_current[11];
-    	 //output_current = (((int) (current_output + 32768.5)) - 32768);
-    	 sprintf(output_current,"%d.%02u", (int) current_output, (int) fabs(((current_output - (int) current_output) * 100)));
+    	 uint8_t output_current[7];
+
+    	 //uint8_t output_c = (((int) (current_output + 32768.5)) - 32768);
+
+    	 sprintf(output_current,"%d.%02u",((int) (current_output + 32768.5)) - 32768);
     	 HAL_UART_Transmit(&huart2,output_current,sizeof(output_current),10);
 
     	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Input current: ",sizeof("\r\n Input current: "),10);
-    	 //output_current = (((int) (current_input + 32768.5)) - 32768);
-    	 sprintf(output_current,"%d.%02u", (int) current_input, (int) fabs(((current_input - (int) current_input ) * 100)));
+    	 sprintf(output_current,"%d.%02u",((int) (current_input + 32768.5)) - 32768);
     	 HAL_UART_Transmit(&huart2,output_current,sizeof(output_current),10);
 
     	 //gcvt(ambient_temp,6,output);
