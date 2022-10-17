@@ -187,6 +187,7 @@ void warm_up_controller();
 void cutting_controller();
 void cooling_controller();
 void state_estimate();
+void monitor_input_current();
 
 /* USER CODE END 0 */
 
@@ -227,7 +228,7 @@ int main(void)
   /* USER CODE BEGIN 2 */
   //calibrate ADC on start-up for better accuracy
   HAL_ADCEx_Calibration_Start(&hadc1);
-  HAL_TIM_PWM_Start(&htim14, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start_IT(&htim14, TIM_CHANNEL_1);
   //current_state = POWER_ON;
   startup_initialisation();
   /* USER CODE END 2 */
@@ -242,8 +243,7 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 	  HAL_ADC_Start_DMA (&hadc1, &pot_reading, 1);
-	  ina_initialise(WIRE_INA219);
-
+	  UART_output();
 	  if(temp_checks()==IN_THRESHOLD){
 		  monitor_input_current();
 		  wire_temp_calc();
@@ -289,7 +289,7 @@ int main(void)
 		  set_PWM_driveFET(0);
 		  HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Board too hot",sizeof("\r\n Board too hot"),10);
 	  }
-	  }
+  }
   /* USER CODE END 3 */
 }
 
@@ -755,6 +755,8 @@ static void MX_GPIO_Init(void)
 	 float in_current = measure_current(INPUT_INA219);
 	 if (in_current >= MAX_INRUSH_CURRENT){
 		 set_PWM_driveFET(0);
+		 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Input current to large",sizeof("\r\n Input current to large"),10);
+		 startup_initialisation();
 	 }
  }
 /**
@@ -777,6 +779,7 @@ static void MX_GPIO_Init(void)
  float wire_temp_calc(){
 	   float wire_current = measure_current(WIRE_INA219);
 	   float wire_resistance = SUPPLY_VOLTAGE/wire_current;
+	   wire_resistance= wire_resistance-0.2;
 	   float temp = 0;
 	   if(CUTTER_TYPE==1){
 		   temp = wire_resistance/(R_REF_NICKEL*3*NICKEL_TCR);//todo remove x3
@@ -1031,7 +1034,7 @@ void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin){
 		HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n NOT",sizeof("\r\n NOT"),10);*/
 		break;
 	case SW2:
-		set_PWM_driveFET(0.8);
+		set_PWM_driveFET(0.4);
 		/*switch (current_state){
 		case POWER_ON:
 			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Please Wait",sizeof("\r\n Please Wait"),10);
