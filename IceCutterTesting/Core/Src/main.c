@@ -62,14 +62,14 @@ UART_HandleTypeDef huart2;
 #define INA_CAL  			0xA6C2//0x7482
 #define INA_CAL_INPUT		0x96A8
 #define INA_CURRENT_LSB 	0.001831055
-#define INA_POWER_LSB 		0.036621094 //current_LSB *20
+#define INA_POWER_LSB 		0.0366211 //current_LSB *20
 #define INA_CONFIG_VALUE 	0x299F //sets PGA =2
 #define INA_CONFIG_PGA_8	0x399F //set PGA = 8
 #define MAX_INRUSH_CURRENT 	59
 
 #define TMP_TEMP_REG  		0x00
 #define TMP_LSB  			0.0078125 //set from datasheet
-#define ARR_MAX 			0xFFF; //for 12bit resolution @ Fclk = 16MHz
+#define ARR_MAX 			15999//0xFFF; //for 12bit resolution @ Fclk = 16MHz
 #define TMP_ADD_WIRE 		0x48
 #define TMP_ADD_INPUT 		0x49
 #define TMP_ADD_AMBIENT 	0x4A
@@ -141,6 +141,8 @@ uint8_t current_state;
 
 float wire_temp_global;
 float prev_wire_temp_global;
+float input_power;
+float output_power;
 uint16_t pot_reading;
 float temp_setpoint;
 float TMP_Input;
@@ -149,6 +151,7 @@ float TMP_Ambient;
 float current_input=0;
 float current_output=0;
 uint16_t counter = 0;
+uint8_t counter_uart = 0;
 
 /* USER CODE END PV */
 
@@ -288,7 +291,11 @@ int main(void)
 			  startup_initialisation();
 		  break;
 		  }
-		  UART_output();
+		  if(counter_uart %1 ==0){
+			  UART_output();
+			  counter_uart = 0;
+		  }
+		  counter_uart += counter_uart;
 	  }else{
 		  HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Board too hot",sizeof("\r\n Board too hot"),10);
 		  set_PWM_driveFET(0);
@@ -510,7 +517,7 @@ static void MX_TIM14_Init(void)
   htim14.Instance = TIM14;
   htim14.Init.Prescaler = 0;
   htim14.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim14.Init.Period = 4095;
+  htim14.Init.Period = 15999;
   htim14.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim14.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim14) != HAL_OK)
@@ -773,7 +780,15 @@ static void MX_GPIO_Init(void)
  {
 	   int temp = read_register(device_address, INA_POWER_REG);
 	   float power = INA_POWER_LSB *temp;
-	   return power;
+	   switch (device_address){
+	   	   case WIRE_INA219:
+	   		   output_power = power;
+	   		   break;
+	   	   case INPUT_INA219:
+	   		   input_power = power;
+	   		   break;
+	   	   }
+	   	   return power;
  }
 
 /**
@@ -784,7 +799,7 @@ static void MX_GPIO_Init(void)
  float wire_temp_calc(){
 	 long temp = 0;
 	 float wire_current = current_output;//measure_current(WIRE_INA219);
-	 HAL_Delay(0.2);
+	 HAL_Delay(1);
 	 //wire_current = current_output;
 	 float board_resistance = 0.10726;
 	 float red_lead = 0.00001;
@@ -793,6 +808,12 @@ static void MX_GPIO_Init(void)
 
 	 float wire_resistance = 4.53/wire_current;//SUPPLY_VOLTAGE/wire_current;
 	 wire_resistance -= board_impedance;
+
+	 if(wire_current <=1){
+		 temp = 0.123456789;
+		 wire_temp_global = temp;
+		 return temp;
+	 }
 
 	 if(CUTTER_TYPE==1){
 		 temp = wire_resistance/(R_REF_NICKEL*1.9*NICKEL_TCR);//todo remove x3
@@ -807,8 +828,7 @@ static void MX_GPIO_Init(void)
 	 if(temp <= MAX_ALLOWED_TEMP && temp >=-200){
 		 prev_wire_temp_global = wire_temp_global;
 		 wire_temp_global = temp;
-	 }
-	 if(temp>MAX_ALLOWED_TEMP && prev_wire_temp_global <=TMP_Output){
+	 } else if(temp>MAX_ALLOWED_TEMP && prev_wire_temp_global >=TMP_Output){
 		 temp = prev_wire_temp_global;
 		 wire_temp_global = temp;
 	 }else{
@@ -928,58 +948,72 @@ static void MX_GPIO_Init(void)
  * @brief outputs overview of all system parameters via UART interface
  */
 void UART_output(){
-    	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n ------------------",sizeof("\r\n ------------------"),10);
-    	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Output current: ",sizeof("\r\n Output current: "),10);
+		uint8_t output[7];
+	    	 uint8_t output_current[7];
 
-    	 uint8_t output[7];
-    	 uint8_t output_current[7];
+		HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n ------------------",sizeof("\r\n ------------------"),10);
+    	HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Output current: ",sizeof("\r\n Output current: "),10);
 
-    	 sprintf(output_current,"%d.%02u",((int) (current_output + 0.5)));
-    	 HAL_UART_Transmit(&huart2,output_current,sizeof(output_current),10);
 
-    	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Input current: ",sizeof("\r\n Input current: "),10);
-    	 sprintf(output_current,"%d.%02u",((int) (current_input + 0.5)));
-    	 HAL_UART_Transmit(&huart2,output_current,sizeof(output_current),10);
+    	sprintf(output_current,"%d.%02u",((int) (current_output + 0.5)));
+    	HAL_UART_Transmit(&huart2,output_current,sizeof(output_current),10);
+
+
+
+    	HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Output power: ",sizeof("\r\n Output power: "),10);
+    	sprintf(output_current,"%d.%02u",((int) (output_power + 0.5)));
+    	HAL_UART_Transmit(&huart2,output_current,sizeof(output_current),10);
+
+    	HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Input current: ",sizeof("\r\n Input current: "),10);
+    	sprintf(output_current,"%d.%02u",((int) (current_input + 0.5)));
+    	HAL_UART_Transmit(&huart2,output_current,sizeof(output_current),10);
+
+    	HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Input power: ",sizeof("\r\n Input power: "),10);
+    	sprintf(output_current,"%d.%02u",((int) (input_power + 0.5)));
+    	HAL_UART_Transmit(&huart2,output_current,sizeof(output_current),10);
 
     	 //gcvt(ambient_temp,6,output);
-    	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Ambient temp: ",sizeof("\r\n Ambient temp: "),10);
-    	 sprintf(output,"%d.%02u", (int) TMP_Ambient, (int) fabs(((TMP_Ambient - (int) TMP_Ambient ) * 100)));
-    	 HAL_UART_Transmit(&huart2,output,sizeof(output),10);
+    	HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Ambient temp: ",sizeof("\r\n Ambient temp: "),10);
+    	sprintf(output,"%d.%02u", (int) TMP_Ambient, (int) fabs(((TMP_Ambient - (int) TMP_Ambient ) * 100)));
+    	HAL_UART_Transmit(&huart2,output,sizeof(output),10);
 
 
-    	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Input shunt temp: ",sizeof("\r\n Input shunt temp: "),10);
-    	 sprintf(output,"%d.%02u", (int) TMP_Input, (int) fabs(((TMP_Input - (int) TMP_Input ) * 100)));
-    	 HAL_UART_Transmit(&huart2,output,sizeof(output),10);
+    	HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Input shunt temp: ",sizeof("\r\n Input shunt temp: "),10);
+    	sprintf(output,"%d.%02u", (int) TMP_Input, (int) fabs(((TMP_Input - (int) TMP_Input ) * 100)));
+    	HAL_UART_Transmit(&huart2,output,sizeof(output),10);
 
+    	HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Output shunt temp: ",sizeof("\r\n Output shunt temp: "),10);
+    	sprintf(output,"%d.%02u", (int) TMP_Output, (int) fabs(((TMP_Output - (int) TMP_Output ) * 100)));
+    	HAL_UART_Transmit(&huart2,output,sizeof(output),10);
 
-    	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Output shunt temp: ",sizeof("\r\n Output shunt temp: "),10);
-    	 sprintf(output,"%d.%02u", (int) TMP_Output, (int) fabs(((TMP_Output - (int) TMP_Output ) * 100)));
-    	 HAL_UART_Transmit(&huart2,output,sizeof(output),10);
+    	HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Potentiometer reading: ",sizeof("\r\n Potentiometer reading: "),10);
+    	sprintf(output,"%d.%02u", (int) pot_reading, (int) fabs(((pot_reading - (int) pot_reading ) * 100)));
+    	HAL_UART_Transmit(&huart2,output,sizeof(output),10);
 
-    	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Potentiometer reading: ",sizeof("\r\n Potentiometer reading: "),10);
-    	 sprintf(output,"%d.%02u", (int) pot_reading, (int) fabs(((pot_reading - (int) pot_reading ) * 100)));
-    	 HAL_UART_Transmit(&huart2,output,sizeof(output),10);
+    	sprintf(output,"%d.%02u", (int) duty_cycle_global, (int) fabs(((duty_cycle_global - (int) duty_cycle_global ) * 100)));
+    	HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Current duty cycle: ",sizeof("\r\n Current duty cycle: "),10);
+    	HAL_UART_Transmit(&huart2,output,sizeof(output),10);
 
-    	 sprintf(output,"%d.%02u", (int) duty_cycle_global, (int) fabs(((duty_cycle_global - (int) duty_cycle_global ) * 100)));
-    	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Current duty cycle: ",sizeof("\r\n Current duty cycle: "),10);
-    	 HAL_UART_Transmit(&huart2,output,sizeof(output),10);
+    	sprintf(output,"%d.%02u", (int) temp_setpoint, (int) fabs(((temp_setpoint - (int) temp_setpoint ) * 100)));
+    	HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Set point Temp: ",sizeof("\r\n Set point Temp: "),10);
+    	HAL_UART_Transmit(&huart2,output,sizeof(output),10);
 
-    	 sprintf(output,"%d.%02u", (int) temp_setpoint, (int) fabs(((temp_setpoint - (int) temp_setpoint ) * 100)));
-    	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Set point Temp: ",sizeof("\r\n Set point Temp: "),10);
-    	 HAL_UART_Transmit(&huart2,output,sizeof(output),10);
+    	HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Current Temp: ",sizeof("\r\n Current Temp: "),10);
+    	if(wire_temp_global != 0.123456789){
+    		sprintf(output,"%d.%02u", (int) wire_temp_global, (int) fabs(((wire_temp_global - (int) wire_temp_global ) * 100)));
+    		HAL_UART_Transmit(&huart2,output,sizeof(output),10);
+    	}else{
+    		HAL_UART_Transmit(&huart2,"Wire not conducting",sizeof("Wire not conducting"),10);
+    	}
 
-    	 sprintf(output,"%d.%02u", (int) wire_temp_global, (int) fabs(((wire_temp_global - (int) wire_temp_global ) * 100)));
-    	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Current Temp: ",sizeof("\r\n Current Temp: "),10);
-    	 HAL_UART_Transmit(&huart2,output,sizeof(output),10);
-
-    	 char Power_on[]	= 	"Power On";
-    	 char Initialise[]	= 	"Initialised";
-    	 char Init[]		= 	"Initialising";
-    	 char Settle[]		= 	"Settling State";
-    	 char SS[]			= 	"Steady-State";
-    	 char cutting[]		= 	"Cutting";
-    	 char cooldown[]	= 	"Cooldown";
-    	 HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Current State: ",sizeof("\r\n Current State: "),10);
+    	char Power_on[]	= 	"Power On";
+    	char Initialise[]	= 	"Initialised";
+    	char Init[]		= 	"Initialising";
+    	char Settle[]		= 	"Settling State";
+    	char SS[]			= 	"Steady-State";
+    	char cutting[]		= 	"Cutting";
+    	char cooldown[]	= 	"Cooldown";
+    	HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Current State: ",sizeof("\r\n Current State: "),10);
     	 switch(current_state){
     	 case POWER_ON:
     		 HAL_UART_Transmit(&huart2,(uint8_t *)Power_on,sizeof(Power_on),10);
@@ -1005,7 +1039,7 @@ void UART_output(){
     	 }
 
 
-    	 HAL_Delay(1000);//TODO remove this in actual application
+    	 //HAL_Delay(1000);//TODO remove this in actual application
     }
 
 /**
@@ -1016,13 +1050,13 @@ void set_PWM_driveFET(float duty_cycle){
     	//uint16_t CRR = calculate_CRR(duty_cycle);
     	uint16_t CRR;
     	if(duty_cycle>=DUTY_CYCLE_MAX){
-    		CRR = DUTY_CYCLE_MAX*POT_MAX_READING;
+    		CRR = DUTY_CYCLE_MAX*ARR_MAX;
     	}else if(duty_cycle>=1){
     		CRR = ARR_MAX;
     	}else if(duty_cycle<=0){
     		CRR=0;
     	}else{
-    		CRR = duty_cycle*POT_MAX_READING;
+    		CRR = duty_cycle*ARR_MAX;
     	}
     	TIM14->CCR1 = CRR;
     	duty_cycle_global = duty_cycle*100;
@@ -1167,6 +1201,7 @@ void state_estimate(){
 
     float diff_wire_temp = wire_temp_global - prev_wire_temp_global;
 
+    if(wire_temp_global !=  0.123456789){
     switch(current_state){
     case INITIALISING:
     	break;
@@ -1214,17 +1249,19 @@ void state_estimate(){
     	startup_initialisation();
     	break;
     }
+    }
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim)
 {
 	//HAL_UART_Transmit(&huart2, (uint8_t)"\r\n x", sizeof("\r\n x"), 10);
 	counter += 1;
-	if(counter %2 == 0){
+	if(counter % 1000 == 0){
 		measure_current(WIRE_INA219);
 		measure_current(INPUT_INA219);
-		HAL_GPIO_TogglePin(RED_LED_state, RED_LED);
-		HAL_GPIO_TogglePin(GREEN_LED_state, GREEN_LED);
+		measure_power(WIRE_INA219);
+		measure_power(INPUT_INA219);
+		//wire_temp_calc();
 	}
 }
 
