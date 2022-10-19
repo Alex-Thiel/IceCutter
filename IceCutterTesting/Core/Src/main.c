@@ -65,6 +65,7 @@ UART_HandleTypeDef huart2;
 #define INA_POWER_LSB 		0.0366211 //current_LSB *20
 #define INA_CONFIG_VALUE 	0x299F //sets PGA =2
 #define INA_CONFIG_PGA_8	0x399F //set PGA = 8
+#define INA_CONFIG_4_SAMP	0x39D7//set sampling to 4 average
 #define MAX_INRUSH_CURRENT 	59
 
 #define TMP_TEMP_REG  		0x00
@@ -119,6 +120,11 @@ UART_HandleTypeDef huart2;
 #define MAX_ALLOWED_TEMP 1446.0 //0x5A6 = 1446 = Nickel Melting temp
 #define POT_MAX_READING 4095.0
 #define DUTY_CYCLE_MAX 1
+
+#define FCLK			16000000
+#define PSC				7
+#define MAX_ARR			65535
+#define ON_TIME			0.005
 
 #define Ki_warming 0
 #define Kp_warming 0
@@ -193,7 +199,7 @@ void cutting_controller();
 void cooling_controller();
 void state_estimate();
 void monitor_input_current();
-
+uint16_t calc_ARR(float duty_cycle);
 
 /* USER CODE END 0 */
 
@@ -250,8 +256,8 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 	  HAL_ADC_Start_DMA (&hadc1, &pot_reading, 1);
-	  if(temp_checks()==IN_THRESHOLD){
-		  monitor_input_current();
+	  if(/*temp_checks()*/1==IN_THRESHOLD){
+		  //monitor_input_current();
 		  wire_temp_calc();
 		  state_estimate();
 		  switch (current_state){
@@ -291,10 +297,7 @@ int main(void)
 			  startup_initialisation();
 		  break;
 		  }
-		  if(counter_uart %1 ==0){
-			  UART_output();
-			  counter_uart = 0;
-		  }
+		  UART_output();
 		  counter_uart += counter_uart;
 	  }else{
 		  HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Board too hot",sizeof("\r\n Board too hot"),10);
@@ -515,7 +518,7 @@ static void MX_TIM14_Init(void)
 
   /* USER CODE END TIM14_Init 1 */
   htim14.Instance = TIM14;
-  htim14.Init.Prescaler = 0;
+  htim14.Init.Prescaler = 7;
   htim14.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim14.Init.Period = 15999;
   htim14.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -748,10 +751,12 @@ static void MX_GPIO_Init(void)
  */
  float measure_current(uint8_t device_address)
  {
-	   int current_reg = read_register(device_address,INA_CURRENT_REG);
-	   float current = INA_CURRENT_LSB*current_reg;
-	   switch (device_address){
-	   case WIRE_INA219:
+
+
+	  int current_reg = read_register(device_address,INA_CURRENT_REG);
+	  float current = INA_CURRENT_LSB*current_reg;
+	  switch (device_address){
+	  case WIRE_INA219:
 		   current_output = current;
 		   break;
 	   case INPUT_INA219:
@@ -846,7 +851,7 @@ static void MX_GPIO_Init(void)
  void ina_initialise(){
 	   write_to_register(WIRE_INA219,INA_CALIB_REG, INA_CAL);
 	   write_to_register(INPUT_INA219, INA_CALIB_REG, INA_CAL_INPUT);
-	   write_to_register(WIRE_INA219, INA_CONFIG_REG, INA_CONFIG_PGA_8);
+	   write_to_register(WIRE_INA219, INA_CONFIG_REG, INA_CONFIG_4_SAMP);
 	   write_to_register(INPUT_INA219, INA_CONFIG_REG, INA_CONFIG_PGA_8);
  }
 
@@ -949,7 +954,7 @@ static void MX_GPIO_Init(void)
  */
 void UART_output(){
 		uint8_t output[7];
-	    	 uint8_t output_current[7];
+	    uint8_t output_current[7];
 
 		HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n ------------------",sizeof("\r\n ------------------"),10);
     	HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Output current: ",sizeof("\r\n Output current: "),10);
@@ -1039,7 +1044,7 @@ void UART_output(){
     	 }
 
 
-    	 //HAL_Delay(1000);//TODO remove this in actual application
+    	 HAL_Delay(1000);//TODO remove this in actual application
     }
 
 /**
@@ -1048,19 +1053,45 @@ void UART_output(){
  */
 void set_PWM_driveFET(float duty_cycle){
     	//uint16_t CRR = calculate_CRR(duty_cycle);
-    	uint16_t CRR;
+    	uint16_t CCR;
+    	uint16_t ARR;
     	if(duty_cycle>=DUTY_CYCLE_MAX){
-    		CRR = DUTY_CYCLE_MAX*ARR_MAX;
+    		ARR = calc_ARR(DUTY_CYCLE_MAX);
+    		CCR = DUTY_CYCLE_MAX*ARR;
     	}else if(duty_cycle>=1){
-    		CRR = ARR_MAX;
+    		ARR = calc_ARR(1);
+    		CCR = ARR;
     	}else if(duty_cycle<=0){
-    		CRR=0;
+    		ARR = 39999;//200Hz
+    		CCR=0;
     	}else{
-    		CRR = duty_cycle*ARR_MAX;
+    		ARR = calc_ARR(duty_cycle);
+    		CCR = duty_cycle*ARR;
     	}
-    	TIM14->CCR1 = CRR;
+
+    	TIM14->CCR1 = CCR;
+    	TIM14->ARR = ARR;
+
     	duty_cycle_global = duty_cycle*100;
     }
+
+uint16_t calc_ARR(float duty_cycle){
+	float off_time = (ON_TIME/duty_cycle)-ON_TIME;
+	float period = ON_TIME+off_time;
+	float Fpwm = 1/period;
+	uint16_t round_Fpwm = round(Fpwm);
+	uint16_t ARR = (FCLK/(round_Fpwm*(PSC+1)))-1;
+
+	if(ARR<=65535){
+		return ARR;
+	}else if(ARR<0){
+		ARR = 0;
+		return ARR;
+	}else{
+		ARR = 65535;
+		return ARR;
+	}
+}
 
 
 /**
@@ -1083,7 +1114,7 @@ void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin){
 		HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n NOT",sizeof("\r\n NOT"),10);*/
 		break;
 	case SW2:
-		set_PWM_driveFET(0.7);
+		set_PWM_driveFET(0.1);
 		/*switch (current_state){
 		case POWER_ON:
 			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Please Wait",sizeof("\r\n Please Wait"),10);
@@ -1256,13 +1287,27 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim)
 {
 	//HAL_UART_Transmit(&huart2, (uint8_t)"\r\n x", sizeof("\r\n x"), 10);
 	counter += 1;
-	if(counter % 1000 == 0){
+	//HAL_Delay(1);
+	if(counter % 1 == 0){
 		measure_current(WIRE_INA219);
 		measure_current(INPUT_INA219);
-		measure_power(WIRE_INA219);
-		measure_power(INPUT_INA219);
+		//measure_power(WIRE_INA219);
+		//measure_power(INPUT_INA219);
 		//wire_temp_calc();
 	}
+}
+
+
+//TODO use to trigger 4 sampling
+/*void HAL_TIM_PWM_PulseFinishedHalfCpltCallback(TIM_HandleTypeDef *htim){
+	counter += 1;
+		if(counter % 1 == 0){
+			measure_current(WIRE_INA219);
+			measure_current(INPUT_INA219);
+			measure_power(WIRE_INA219);
+			measure_power(INPUT_INA219);
+			//wire_temp_calc();
+		}
 }
 
 /* USER CODE END 4 */
