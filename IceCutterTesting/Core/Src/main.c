@@ -57,6 +57,7 @@ UART_HandleTypeDef huart2;
 #define INPUT_INA219 		0x41
 
 #define INA_CONFIG_REG  	0x00
+#define INA_VOLT_REG		0x01
 #define INA_POWER_REG 		0x03
 #define INA_CURRENT_REG  	0x04
 #define INA_CALIB_REG  		0x05
@@ -75,9 +76,9 @@ UART_HandleTypeDef huart2;
 #define TMP_ADD_WIRE 		0x48
 #define TMP_ADD_INPUT 		0x49
 #define TMP_ADD_AMBIENT 	0x4A
-#define TEMP_LIMIT_AMBIENT 	0x32 //50C
-#define TEMP_LIMIT_WIRE 	0x32//0x50 //80C
-#define TEMP_LIMIT_INPUT 	0x32//0x50 //80C
+#define TEMP_LIMIT_AMBIENT 	0x32//50C
+#define TEMP_LIMIT_WIRE 	0x55//85C
+#define TEMP_LIMIT_INPUT 	0x55//85C
 
 #define COPPER_TCR			0.00393//0.004
 #define NICKEL_TCR 			0.0059//0.005671
@@ -261,7 +262,7 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 	  HAL_ADC_Start_DMA (&hadc1, &pot_reading, 1);
-	  if(/*temp_checks()*/1==IN_THRESHOLD){
+	  if(temp_checks()==IN_THRESHOLD){
 		  //monitor_input_current();
 		  wire_temp_calc();
 		  state_estimate();
@@ -517,7 +518,6 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 0 */
 
-  TIM_SlaveConfigTypeDef sSlaveConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
   TIM_OC_InitTypeDef sConfigOC = {0};
 
@@ -525,22 +525,12 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 1 */
   htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 0;
+  htim3.Init.Prescaler = 1;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 31999;
+  htim3.Init.Period = 38094;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
-  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
-  {
-    Error_Handler();
-  }
   if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sSlaveConfig.SlaveMode = TIM_SLAVEMODE_DISABLE;
-  sSlaveConfig.InputTrigger = TIM_TS_ITR3;
-  if (HAL_TIM_SlaveConfigSynchro(&htim3, &sSlaveConfig) != HAL_OK)
   {
     Error_Handler();
   }
@@ -585,7 +575,7 @@ static void MX_TIM14_Init(void)
   htim14.Instance = TIM14;
   htim14.Init.Prescaler = 7;
   htim14.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim14.Init.Period = 15999;
+  htim14.Init.Period = 65535;
   htim14.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim14.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim14) != HAL_OK)
@@ -771,18 +761,6 @@ static void MX_GPIO_Init(void)
      return register_value_return;
  }
 
- void write_to_reg_unspecified(uint8_t device_address, uint16_t register_value)
- {
-     HAL_StatusTypeDef status = HAL_OK;
-     uint16_t register_value_swapped = swap_endian(register_value);
-     HAL_I2C_Master_Transmit(&hi2c2,(device_address<<1),&register_value_swapped,I2C_MEMADD_SIZE_16BIT,50);
-     /* Check the communication status */
-     if(status != HAL_OK)
-     {
-         // Error handling, for example re-initialization of the I2C peripheral
-     }
- }
-
  /**
  * @brief	Calculate and return temperature measured by TMP117
  * @param	int16_t register_value
@@ -859,6 +837,10 @@ static void MX_GPIO_Init(void)
 	   		   break;
 	   	   }
 	   	   return power;
+ }
+
+ float measure_voltage(){
+	 int temp = read_register(WIRE_INA219, INA_VOLT_REG);
  }
 
 /**
