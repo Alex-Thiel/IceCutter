@@ -57,7 +57,7 @@ UART_HandleTypeDef huart2;
 #define INPUT_INA219 		0x41
 
 #define INA_CONFIG_REG  	0x00
-#define INA_VOLT_REG		0x01
+#define INA_VOLT_REG		0x02
 #define INA_POWER_REG 		0x03
 #define INA_CURRENT_REG  	0x04
 #define INA_CALIB_REG  		0x05
@@ -68,6 +68,7 @@ UART_HandleTypeDef huart2;
 #define INA_CONFIG_VALUE 	0x299F //sets PGA =2
 #define INA_CONFIG_PGA_8	0x399F //set PGA = 8
 #define INA_CONFIG_4_SAMP	0x39D7//set sampling to 4 average
+#define INA_CONFIG_8_SAMP	0x39DF//set sampling to 8 average
 #define MAX_INRUSH_CURRENT 	59
 
 #define TMP_TEMP_REG  		0x00
@@ -124,7 +125,7 @@ UART_HandleTypeDef huart2;
 #define DUTY_CYCLE_MAX 1
 
 #define FCLK			16000000
-#define PSC				7
+#define PSC				20
 #define MAX_ARR			65535
 #define ON_TIME			0.005
 
@@ -158,6 +159,7 @@ float TMP_Output;
 float TMP_Ambient;
 float current_input=0;
 float current_output=0;
+float output_voltage;
 
 uint8_t counter_uart = 0;
 uint8_t counter_timer = 1;
@@ -527,7 +529,7 @@ static void MX_TIM3_Init(void)
   htim3.Instance = TIM3;
   htim3.Init.Prescaler = 1;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 38094;
+  htim3.Init.Period = 29629;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
@@ -573,7 +575,7 @@ static void MX_TIM14_Init(void)
 
   /* USER CODE END TIM14_Init 1 */
   htim14.Instance = TIM14;
-  htim14.Init.Prescaler = 7;
+  htim14.Init.Prescaler = 20;
   htim14.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim14.Init.Period = 65535;
   htim14.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -840,7 +842,12 @@ static void MX_GPIO_Init(void)
  }
 
  float measure_voltage(){
-	 int temp = read_register(WIRE_INA219, INA_VOLT_REG);
+	 uint16_t temp = read_register(WIRE_INA219, INA_VOLT_REG);
+	 temp = temp>>3;
+	 float voltage = temp * 0.004;
+	 output_voltage = voltage;
+	 return voltage;
+
  }
 
 /**
@@ -858,7 +865,7 @@ static void MX_GPIO_Init(void)
 	 float black_lead = 0.00007;
 	 float board_impedance = board_resistance+red_lead+black_lead;
 
-	 float wire_resistance = 4.53/wire_current;//SUPPLY_VOLTAGE/wire_current;
+	 float wire_resistance = output_voltage/wire_current;//SUPPLY_VOLTAGE/wire_current;
 	 wire_resistance -= board_impedance;
 
 	 if(wire_current <=1){
@@ -898,8 +905,8 @@ static void MX_GPIO_Init(void)
  void ina_initialise(){
 	   write_to_register(WIRE_INA219,INA_CALIB_REG, INA_CAL);
 	   write_to_register(INPUT_INA219, INA_CALIB_REG, INA_CAL_INPUT);
-	   write_to_register(WIRE_INA219, INA_CONFIG_REG, INA_CONFIG_4_SAMP);
-	   write_to_register(INPUT_INA219, INA_CONFIG_REG, INA_CONFIG_PGA_8);
+	   write_to_register(WIRE_INA219, INA_CONFIG_REG, INA_CONFIG_8_SAMP);
+	   write_to_register(INPUT_INA219, INA_CONFIG_REG, INA_CONFIG_8_SAMP);
  }
 
 
@@ -1008,13 +1015,13 @@ void UART_output(){
     	HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Output current: ",sizeof("\r\n Output current: "),10);
 
 
-    	sprintf(output_current,"%d.%02u",((int) (current_output + 0.5)));
+    	sprintf(output_current,"%d.%03u",((int) (current_output + 0.5)));
     	HAL_UART_Transmit(&huart2,output_current,sizeof(output_current),10);
 
 
 
-    	HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Output power: ",sizeof("\r\n Output power: "),10);
-    	sprintf(output_current,"%d.%02u",((int) (output_power + 0.5)));
+    	HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Output voltage: ",sizeof("\r\n Output voltage: "),10);
+    	sprintf(output_current,"%d.%02u",((int) (output_voltage + 0.5)));
     	HAL_UART_Transmit(&huart2,output_current,sizeof(output_current),10);
 
     	HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Input current: ",sizeof("\r\n Input current: "),10);
@@ -1162,7 +1169,7 @@ void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin){
 		HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n NOT",sizeof("\r\n NOT"),10);*/
 		break;
 	case SW2:
-		set_PWM_driveFET(0.7);
+		set_PWM_driveFET(0.03);
 		/*switch (current_state){
 		case POWER_ON:
 			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Please Wait",sizeof("\r\n Please Wait"),10);
@@ -1197,7 +1204,9 @@ void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin){
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc){
         // Read & Update The ADC Result
     	//TIM14->CCR1 = pot_reading;
-    	temp_setpoint=pot_temp();
+		float duty_cycle = pot_reading/4095.0;
+		set_PWM_driveFET(duty_cycle);
+    	//temp_setpoint=pot_temp();
 		//temp_setpoint = pot_reading * scaling;
 	}
 
@@ -1337,6 +1346,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim)
 	if(htim == &htim3){
 		//TIM3->CCR1=15999;
 		if(counter_timer %2 == 0){
+			measure_voltage();
 			measure_current(WIRE_INA219);
 			measure_current(INPUT_INA219);
 			counter_timer=1;
