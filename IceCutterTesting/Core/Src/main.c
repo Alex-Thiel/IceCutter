@@ -46,6 +46,7 @@ DMA_HandleTypeDef hdma_adc1;
 I2C_HandleTypeDef hi2c2;
 
 TIM_HandleTypeDef htim1;
+TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim14;
 
 UART_HandleTypeDef huart2;
@@ -156,8 +157,9 @@ float TMP_Output;
 float TMP_Ambient;
 float current_input=0;
 float current_output=0;
-uint16_t counter = 0;
+
 uint8_t counter_uart = 0;
+uint8_t counter_timer = 1;
 
 /* USER CODE END PV */
 
@@ -170,6 +172,7 @@ static void MX_I2C2_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_TIM14_Init(void);
+static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -237,11 +240,13 @@ int main(void)
   MX_ADC1_Init();
   MX_TIM1_Init();
   MX_TIM14_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
   //calibrate ADC on start-up for better accuracy
   HAL_ADCEx_Calibration_Start(&hadc1);
   HAL_TIM_PWM_Start(&htim14, TIM_CHANNEL_1);
   HAL_TIM_Base_Start_IT(&htim14);
+
   //current_state = POWER_ON;
   startup_initialisation();
   /* USER CODE END 2 */
@@ -501,6 +506,66 @@ static void MX_TIM1_Init(void)
 }
 
 /**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_SlaveConfigTypeDef sSlaveConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 0;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 31999;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sSlaveConfig.SlaveMode = TIM_SLAVEMODE_DISABLE;
+  sSlaveConfig.InputTrigger = TIM_TS_ITR3;
+  if (HAL_TIM_SlaveConfigSynchro(&htim3, &sSlaveConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
+  HAL_TIM_MspPostInit(&htim3);
+
+}
+
+/**
   * @brief TIM14 Initialization Function
   * @param None
   * @retval None
@@ -522,7 +587,7 @@ static void MX_TIM14_Init(void)
   htim14.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim14.Init.Period = 15999;
   htim14.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim14.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  htim14.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim14) != HAL_OK)
   {
     Error_Handler();
@@ -927,6 +992,7 @@ static void MX_GPIO_Init(void)
       * @retval
       */
  void startup_initialisation(){
+	 	TIM3->CCR1=0;
 	 	current_state = INITIALISING;
 	 	HAL_GPIO_WritePin(RED_LED_state, RED_LED, GPIO_PIN_SET);//turn on red led
 	 	HAL_GPIO_WritePin(GREEN_LED_state, GREEN_LED, GPIO_PIN_RESET);//turn off green led
@@ -1114,7 +1180,7 @@ void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin){
 		HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n NOT",sizeof("\r\n NOT"),10);*/
 		break;
 	case SW2:
-		set_PWM_driveFET(0.1);
+		set_PWM_driveFET(0.7);
 		/*switch (current_state){
 		case POWER_ON:
 			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Please Wait",sizeof("\r\n Please Wait"),10);
@@ -1286,29 +1352,26 @@ void state_estimate(){
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim)
 {
 	//HAL_UART_Transmit(&huart2, (uint8_t)"\r\n x", sizeof("\r\n x"), 10);
-	counter += 1;
-	//HAL_Delay(1);
-	if(counter % 1 == 0){
-		measure_current(WIRE_INA219);
-		measure_current(INPUT_INA219);
-		//measure_power(WIRE_INA219);
-		//measure_power(INPUT_INA219);
-		//wire_temp_calc();
-	}
-}
-
-
-//TODO use to trigger 4 sampling
-/*void HAL_TIM_PWM_PulseFinishedHalfCpltCallback(TIM_HandleTypeDef *htim){
-	counter += 1;
-		if(counter % 1 == 0){
+	if(htim == &htim3){
+		//TIM3->CCR1=15999;
+		if(counter_timer %2 == 0){
 			measure_current(WIRE_INA219);
 			measure_current(INPUT_INA219);
-			measure_power(WIRE_INA219);
-			measure_power(INPUT_INA219);
-			//wire_temp_calc();
+			counter_timer=1;
+		}else{
+			HAL_TIM_PWM_Stop(&htim3, TIM_CHANNEL_2);
+			HAL_TIM_Base_Stop_IT(&htim3);
+			counter_timer +=1;
 		}
+	}else{
+		HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
+		HAL_TIM_Base_Start_IT(&htim3);
+	}
+	//measure_power(WIRE_INA219);
+	//measure_power(INPUT_INA219);
 }
+
+
 
 /* USER CODE END 4 */
 
