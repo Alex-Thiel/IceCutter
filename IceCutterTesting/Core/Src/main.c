@@ -163,6 +163,7 @@ float output_voltage;
 
 uint8_t counter_uart = 0;
 uint8_t counter_timer = 1;
+uint16_t volt_reg;
 
 /* USER CODE END PV */
 
@@ -843,6 +844,7 @@ static void MX_GPIO_Init(void)
 
  float measure_voltage(){
 	 uint16_t temp = read_register(WIRE_INA219, INA_VOLT_REG);
+	 volt_reg = temp;
 	 temp = temp>>3;
 	 float voltage = temp * 0.004;
 	 output_voltage = voltage;
@@ -858,7 +860,7 @@ static void MX_GPIO_Init(void)
  float wire_temp_calc(){
 	 long temp = 0;
 	 float wire_current = current_output;//measure_current(WIRE_INA219);
-	 HAL_Delay(1);
+	 HAL_Delay(0.5);
 	 //wire_current = current_output;
 	 float board_resistance = 0.10726;
 	 float red_lead = 0.00001;
@@ -868,10 +870,12 @@ static void MX_GPIO_Init(void)
 	 float wire_resistance = output_voltage/wire_current;//SUPPLY_VOLTAGE/wire_current;
 	 wire_resistance -= board_impedance;
 
-	 if(wire_current <=1){
-		 temp = 0.123456789;
+	 if(wire_current <=2){
+		 temp = -1000000;
 		 wire_temp_global = temp;
 		 return temp;
+		 exit(0);
+
 	 }
 
 	 if(CUTTER_TYPE==1){
@@ -1019,7 +1023,6 @@ void UART_output(){
     	HAL_UART_Transmit(&huart2,output_current,sizeof(output_current),10);
 
 
-
     	HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Output voltage: ",sizeof("\r\n Output voltage: "),10);
     	sprintf(output_current,"%d.%02u",((int) (output_voltage + 0.5)));
     	HAL_UART_Transmit(&huart2,output_current,sizeof(output_current),10);
@@ -1059,11 +1062,11 @@ void UART_output(){
     	HAL_UART_Transmit(&huart2,output,sizeof(output),10);
 
     	HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Current Temp: ",sizeof("\r\n Current Temp: "),10);
-    	if(wire_temp_global != 0.123456789){
+    	if(wire_temp_global == -1000000){
+    		HAL_UART_Transmit(&huart2,"Wire not conducting",sizeof("Wire not conducting"),10);
+    	}else{
     		sprintf(output,"%d.%02u", (int) wire_temp_global, (int) fabs(((wire_temp_global - (int) wire_temp_global ) * 100)));
     		HAL_UART_Transmit(&huart2,output,sizeof(output),10);
-    	}else{
-    		HAL_UART_Transmit(&huart2,"Wire not conducting",sizeof("Wire not conducting"),10);
     	}
 
     	char Power_on[]	= 	"Power On";
@@ -1169,7 +1172,7 @@ void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin){
 		HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n NOT",sizeof("\r\n NOT"),10);*/
 		break;
 	case SW2:
-		set_PWM_driveFET(0.03);
+		set_PWM_driveFET(0.7);
 		/*switch (current_state){
 		case POWER_ON:
 			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Please Wait",sizeof("\r\n Please Wait"),10);
@@ -1204,8 +1207,8 @@ void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin){
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc){
         // Read & Update The ADC Result
     	//TIM14->CCR1 = pot_reading;
-		float duty_cycle = pot_reading/4095.0;
-		set_PWM_driveFET(duty_cycle);
+		//float duty_cycle = pot_reading/4095.0;
+		//set_PWM_driveFET(duty_cycle);
     	//temp_setpoint=pot_temp();
 		//temp_setpoint = pot_reading * scaling;
 	}
@@ -1289,7 +1292,7 @@ void state_estimate(){
 
     float diff_wire_temp = wire_temp_global - prev_wire_temp_global;
 
-    if(wire_temp_global !=  0.123456789){
+    if(wire_temp_global !=  -100000){
     switch(current_state){
     case INITIALISING:
     	break;
@@ -1340,16 +1343,32 @@ void state_estimate(){
     }
 }
 
+uint8_t ina_error_check(){
+	uint8_t checker = 0;
+	//uint16_t temp = read_register(WIRE_INA219, INA_VOLT_REG);
+	//uint8_t conv = volt_reg & (1 << (2 - 1));
+	//uint8_t conv = 0x02 & volt_reg;
+	//uint8_t ovf = 0x01 & volt_reg;
+	if(volt_reg & (1 << (2 - 1))){
+		checker = 1;
+	}
+	return checker;
+}
+
+
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim)
 {
 	//HAL_UART_Transmit(&huart2, (uint8_t)"\r\n x", sizeof("\r\n x"), 10);
 	if(htim == &htim3){
 		//TIM3->CCR1=15999;
-		if(counter_timer %2 == 0){
+
+		if(counter_timer %4 == 0){
 			measure_voltage();
-			measure_current(WIRE_INA219);
-			measure_current(INPUT_INA219);
-			counter_timer=1;
+			if(ina_error_check() == 1){
+				measure_current(INPUT_INA219);
+				measure_current(WIRE_INA219);
+				counter_timer=1;
+			}
 		}else{
 			HAL_TIM_PWM_Stop(&htim3, TIM_CHANNEL_2);
 			HAL_TIM_Base_Stop_IT(&htim3);
