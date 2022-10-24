@@ -61,12 +61,13 @@ UART_HandleTypeDef huart2;
 #define INA_POWER_REG 		0x03
 #define INA_CURRENT_REG  	0x04
 #define INA_CALIB_REG  		0x05
-#define INA_CAL  			0xA6C2//0x7482
+#define INA_CAL  			0xAEC3//0x7482//0xA6C2//0x7482
 #define INA_CAL_INPUT		0x96A8
-#define INA_CURRENT_LSB 	0.001831055
+#define INA_CURRENT_LSB 	0.001220703//0.001831055
 #define INA_POWER_LSB 		0.0366211 //current_LSB *20
 #define INA_CONFIG_VALUE 	0x299F //sets PGA =2
 #define INA_CONFIG_PGA_8	0x399F //set PGA = 8
+#define INA_CONFIG_1_SAMP	0x399F //set sampling to 1
 #define INA_CONFIG_4_SAMP	0x39D7//set sampling to 4 average
 #define INA_CONFIG_8_SAMP	0x39DF//set sampling to 8 average
 #define MAX_INRUSH_CURRENT 	59
@@ -125,7 +126,7 @@ UART_HandleTypeDef huart2;
 #define DUTY_CYCLE_MAX 1
 
 #define FCLK			16000000
-#define PSC				20
+#define PSC				80//73//20
 #define MAX_ARR			65535
 #define ON_TIME			0.005
 
@@ -163,7 +164,9 @@ float output_voltage;
 
 uint8_t counter_uart = 0;
 uint8_t counter_timer = 1;
+uint8_t counter_temp = 0;
 uint16_t volt_reg;
+float wire_temp_arr[6];
 
 /* USER CODE END PV */
 
@@ -207,6 +210,7 @@ void cooling_controller();
 void state_estimate();
 void monitor_input_current();
 uint16_t calc_ARR(float duty_cycle);
+void wire_temp_average();
 
 /* USER CODE END 0 */
 
@@ -252,7 +256,8 @@ int main(void)
   HAL_TIM_Base_Start_IT(&htim14);
 
   //current_state = POWER_ON;
-  startup_initialisation();
+  //startup_initialisation();
+  HAL_GPIO_WritePin(GPIOB,SS_FET,GPIO_PIN_SET);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -264,11 +269,14 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+
 	  HAL_ADC_Start_DMA (&hadc1, &pot_reading, 1);
 	  if(temp_checks()==IN_THRESHOLD){
 		  //monitor_input_current();
-		  wire_temp_calc();
-		  state_estimate();
+		  wire_temp_average();
+		  UART_output();
+		  //wire_temp_calc();
+		  //state_estimate();
 		  switch (current_state){
 		  case POWER_ON:
 			  startup_initialisation();
@@ -530,7 +538,7 @@ static void MX_TIM3_Init(void)
   htim3.Instance = TIM3;
   htim3.Init.Prescaler = 1;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 29629;
+  htim3.Init.Period = 26666;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
@@ -576,7 +584,7 @@ static void MX_TIM14_Init(void)
 
   /* USER CODE END TIM14_Init 1 */
   htim14.Instance = TIM14;
-  htim14.Init.Prescaler = 20;
+  htim14.Init.Prescaler = 80;
   htim14.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim14.Init.Period = 65535;
   htim14.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -858,7 +866,7 @@ static void MX_GPIO_Init(void)
  * @retval float variable of wire temperature
  */
  float wire_temp_calc(){
-	 long temp = 0;
+	 float temp = 0;
 	 float wire_current = current_output;//measure_current(WIRE_INA219);
 	 HAL_Delay(0.5);
 	 //wire_current = current_output;
@@ -871,15 +879,13 @@ static void MX_GPIO_Init(void)
 	 wire_resistance -= board_impedance;
 
 	 if(wire_current <=2){
-		 temp = -1000000;
-		 wire_temp_global = temp;
-		 return temp;
-		 exit(0);
+		 //temp = R_REF_NICKEL;
+		 //wire_temp_global = temp;
 
-	 }
+	 }else{
 
 	 if(CUTTER_TYPE==1){
-		 temp = wire_resistance/(R_REF_NICKEL*1.9*NICKEL_TCR);//todo remove x3
+		 temp = wire_resistance/(R_REF_NICKEL*1.6*NICKEL_TCR);//todo remove x3
 		 temp = temp - (1/NICKEL_TCR);
 		 temp = temp + T_REF_NICKEL;
 	 }else{
@@ -889,16 +895,38 @@ static void MX_GPIO_Init(void)
 	 }
 
 	 if(temp <= MAX_ALLOWED_TEMP && temp >=-200){
-		 prev_wire_temp_global = wire_temp_global;
-		 wire_temp_global = temp;
+		 return temp;
+		 //prev_wire_temp_global = wire_temp_global;
+		 //wire_temp_global = temp;
 	 } else if(temp>MAX_ALLOWED_TEMP && prev_wire_temp_global >=TMP_Output){
 		 temp = prev_wire_temp_global;
-		 wire_temp_global = temp;
+		 //wire_temp_global = temp;
 	 }else{
 		 temp = TMP_Output;
-		 wire_temp_global = temp;
+		 //wire_temp_global = temp;
 	 }
-	   return temp;
+	 }
+	 //wire_temp_global = temp;
+
+	 //counter_temp += 1;
+	 return temp;
+ }
+
+ void wire_temp_average(){
+	float temp = wire_temp_calc();
+
+	if(counter_temp>=6){
+		counter_temp=0;
+	}
+
+	wire_temp_arr[counter_temp] = temp;
+	counter_temp+=1;
+	float avg = 0;
+	for(uint8_t i = 0;i<5;i++){
+		avg = avg + wire_temp_arr[i];
+	}
+	avg = avg/6.0;
+	wire_temp_global = avg;
  }
 
 
@@ -985,7 +1013,11 @@ static void MX_GPIO_Init(void)
       * @retval
       */
  void startup_initialisation(){
+	 	for(uint8_t i = 0;i<6;i++){
+	 		wire_temp_arr[i] = 0;
+	 	}
 	 	TIM3->CCR1=0;
+
 	 	current_state = INITIALISING;
 	 	HAL_GPIO_WritePin(RED_LED_state, RED_LED, GPIO_PIN_SET);//turn on red led
 	 	HAL_GPIO_WritePin(GREEN_LED_state, GREEN_LED, GPIO_PIN_RESET);//turn off green led
@@ -1062,20 +1094,24 @@ void UART_output(){
     	HAL_UART_Transmit(&huart2,output,sizeof(output),10);
 
     	HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Current Temp: ",sizeof("\r\n Current Temp: "),10);
-    	if(wire_temp_global == -1000000){
+    	sprintf(output,"%d.%02u", (int) wire_temp_global, (int) fabs(((wire_temp_global - (int) wire_temp_global ) * 100)));
+    	HAL_UART_Transmit(&huart2,output,sizeof(output),10);
+
+    	/*if(wire_temp_global == -1000000){
     		HAL_UART_Transmit(&huart2,"Wire not conducting",sizeof("Wire not conducting"),10);
     	}else{
     		sprintf(output,"%d.%02u", (int) wire_temp_global, (int) fabs(((wire_temp_global - (int) wire_temp_global ) * 100)));
     		HAL_UART_Transmit(&huart2,output,sizeof(output),10);
-    	}
+    	}*/
 
-    	char Power_on[]	= 	"Power On";
+
+    	char Power_on[]		= 	"Power On";
     	char Initialise[]	= 	"Initialised";
-    	char Init[]		= 	"Initialising";
+    	char Init[]			= 	"Initialising";
     	char Settle[]		= 	"Settling State";
     	char SS[]			= 	"Steady-State";
     	char cutting[]		= 	"Cutting";
-    	char cooldown[]	= 	"Cooldown";
+    	char cooldown[]		= 	"Cooldown";
     	HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Current State: ",sizeof("\r\n Current State: "),10);
     	 switch(current_state){
     	 case POWER_ON:
@@ -1161,6 +1197,7 @@ void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin){
 	switch(GPIO_Pin){
 	case SW1:
 		set_PWM_driveFET(0);
+		HAL_GPIO_WritePin(GPIOB,SS_FET,GPIO_PIN_RESET);
 		/*switch (current_state){
 		case STEADY_STATE:
 			current_state = CUTTING;
@@ -1173,6 +1210,8 @@ void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin){
 		break;
 	case SW2:
 		set_PWM_driveFET(0.7);
+		//HAL_GPIO_WritePin(GPIOB,SS_FET,GPIO_PIN_SET);
+
 		/*switch (current_state){
 		case POWER_ON:
 			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Please Wait",sizeof("\r\n Please Wait"),10);
@@ -1361,12 +1400,11 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim)
 	//HAL_UART_Transmit(&huart2, (uint8_t)"\r\n x", sizeof("\r\n x"), 10);
 	if(htim == &htim3){
 		//TIM3->CCR1=15999;
-
-		if(counter_timer %4 == 0){
+		if(counter_timer %2 == 0){
 			measure_voltage();
 			if(ina_error_check() == 1){
-				measure_current(INPUT_INA219);
 				measure_current(WIRE_INA219);
+				measure_current(INPUT_INA219);
 				counter_timer=1;
 			}
 		}else{
