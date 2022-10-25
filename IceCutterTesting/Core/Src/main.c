@@ -121,17 +121,17 @@ UART_HandleTypeDef huart2;
 #define ABOVE_THRESHOLD 0
 #define IN_THRESHOLD 	1
 
-#define MAX_ALLOWED_TEMP 1446.0 //0x5A6 = 1446 = Nickel Melting temp
-#define POT_MAX_READING 4095.0
-#define DUTY_CYCLE_MAX 1
+#define MAX_ALLOWED_TEMP 	1446//1446.0 //0x5A6 = 1446 = Nickel Melting temp
+#define POT_MAX_READING 	4095.0
+#define DUTY_CYCLE_MAX 		1
 
 #define FCLK			16000000
 #define PSC				245//73//20
 #define MAX_ARR			65535
 #define ON_TIME			0.01
 
-#define Ki_warming 0
-#define Kp_warming 0
+#define Ki_warming 0.00002
+#define Kp_warming 5
 #define Kd_warming 0
 float integral = 0;
 float derivative = 0;
@@ -256,7 +256,7 @@ int main(void)
   HAL_TIM_Base_Start_IT(&htim14);
 
   //current_state = POWER_ON;
-  //startup_initialisation();
+  startup_initialisation();
   HAL_GPIO_WritePin(GPIOB,SS_FET,GPIO_PIN_SET);
   /* USER CODE END 2 */
 
@@ -272,10 +272,10 @@ int main(void)
 
 	  HAL_ADC_Start_DMA (&hadc1, &pot_reading, 1);
 	  if(temp_checks()==IN_THRESHOLD){
+		  counter_uart += 1;
 		  //monitor_input_current();
 		  //wire_temp_average();
-		  UART_output();
-		  wire_temp_calc();
+
 		  //state_estimate();
 		  switch (current_state){
 		  case POWER_ON:
@@ -287,7 +287,7 @@ int main(void)
 		  case INITIALISED:
 			  wire_temp_calc();
 			  //waiting for button press
-			  HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Press SW2 to heat",sizeof("\r\n Press SW2 to heat"),10);
+			  //HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Press SW2 to heat",sizeof("\r\n Press SW2 to heat"),10);
 			  break;
 		  case SETTLING_STATE:
 			  warm_up_controller();
@@ -314,8 +314,13 @@ int main(void)
 			  startup_initialisation();
 		  break;
 		  }
-		  UART_output();
-		  counter_uart += counter_uart;
+		  UART_temp_only();
+		  HAL_Delay(100);
+		  //UART_output();
+		  //if(counter_uart == 3){
+			  //UART_output();
+			  //counter_uart = 0;
+		  //}
 	  }else{
 		  HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Board too hot",sizeof("\r\n Board too hot"),10);
 		  set_PWM_driveFET(0);
@@ -805,8 +810,6 @@ static void MX_GPIO_Init(void)
  */
  float measure_current(uint8_t device_address)
  {
-
-
 	  int current_reg = read_register(device_address,INA_CURRENT_REG);
 	  float current = INA_CURRENT_LSB*current_reg;
 	  switch (device_address){
@@ -868,9 +871,9 @@ static void MX_GPIO_Init(void)
  float wire_temp_calc(){
 	 float temp = 0;
 	 float wire_current = current_output;//measure_current(WIRE_INA219);
-	 //HAL_Delay(0.5);
+	 HAL_Delay(0.05);
 	 //wire_current = current_output;
-	 float board_resistance = 0.010726;
+	 float board_resistance = 0.0726;
 	 float red_lead = 0.00001;
 	 float black_lead = 0.00007;
 	 float board_impedance = board_resistance+red_lead+black_lead;
@@ -879,7 +882,7 @@ static void MX_GPIO_Init(void)
 	 wire_resistance -= board_impedance;
 
 	 if(wire_current <=2){
-		 //temp = R_REF_NICKEL;
+		 temp = -10000;
 		 //wire_temp_global = temp;
 
 	 }else{
@@ -889,7 +892,7 @@ static void MX_GPIO_Init(void)
 		 temp = temp - (1/NICKEL_TCR);
 		 temp = temp + T_REF_NICKEL;
 	 }else{
-		 temp = wire_resistance/(R_REF_COPPER*3*COPPER_TCR);
+		 temp = wire_resistance/(R_REF_COPPER*COPPER_TCR);
 		 temp = temp - (1/COPPER_TCR);
 		 temp = temp + T_REF_COPPER;
 	 }
@@ -1012,6 +1015,7 @@ static void MX_GPIO_Init(void)
       * @retval
       */
  void startup_initialisation(){
+	 	counter_uart = 0;
 	 	for(uint8_t i = 0;i<6;i++){
 	 		wire_temp_arr[i] = 0;
 	 	}
@@ -1062,10 +1066,6 @@ void UART_output(){
     	sprintf(output_current,"%d.%02u",((int) (current_input + 0.5)));
     	HAL_UART_Transmit(&huart2,output_current,sizeof(output_current),10);
 
-    	HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Input power: ",sizeof("\r\n Input power: "),10);
-    	sprintf(output_current,"%d.%02u",((int) (input_power + 0.5)));
-    	HAL_UART_Transmit(&huart2,output_current,sizeof(output_current),10);
-
     	 //gcvt(ambient_temp,6,output);
     	HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Ambient temp: ",sizeof("\r\n Ambient temp: "),10);
     	sprintf(output,"%d.%02u", (int) TMP_Ambient, (int) fabs(((TMP_Ambient - (int) TMP_Ambient ) * 100)));
@@ -1093,15 +1093,15 @@ void UART_output(){
     	HAL_UART_Transmit(&huart2,output,sizeof(output),10);
 
     	HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Current Temp: ",sizeof("\r\n Current Temp: "),10);
-    	sprintf(output,"%d.%02u", (int) wire_temp_global, (int) fabs(((wire_temp_global - (int) wire_temp_global ) * 100)));
-    	HAL_UART_Transmit(&huart2,output,sizeof(output),10);
+    	//sprintf(output,"%d.%02u", (int) wire_temp_global, (int) fabs(((wire_temp_global - (int) wire_temp_global ) * 100)));
+    	//HAL_UART_Transmit(&huart2,output,sizeof(output),10);
 
-    	/*if(wire_temp_global == -1000000){
+    	if(wire_temp_global == -10000){
     		HAL_UART_Transmit(&huart2,"Wire not conducting",sizeof("Wire not conducting"),10);
     	}else{
-    		sprintf(output,"%d.%02u", (int) wire_temp_global, (int) fabs(((wire_temp_global - (int) wire_temp_global ) * 100)));
-    		HAL_UART_Transmit(&huart2,output,sizeof(output),10);
-    	}*/
+    		sprintf(output_current,"%d.%02u", (int) wire_temp_global, (int) fabs(((wire_temp_global - (int) wire_temp_global ) * 100)));
+    		HAL_UART_Transmit(&huart2,output_current,sizeof(output_current),100);
+    	}
 
 
     	char Power_on[]		= 	"Power On";
@@ -1136,9 +1136,27 @@ void UART_output(){
     		 break;
     	 }
 
-
-    	 HAL_Delay(1000);//TODO remove this in actual application
+    	 HAL_Delay(100);//TODO remove this in actual application
     }
+
+void UART_temp_only(){
+	uint8_t output[7];
+	HAL_UART_Transmit(&huart2,"	",sizeof("	"),100);
+	if(wire_temp_global == -10000){
+		HAL_UART_Transmit(&huart2,"0",sizeof("0"),100);
+	}else{
+		sprintf(output,"%d.%02u", (int) wire_temp_global, (int) fabs(((wire_temp_global - (int) wire_temp_global ) * 100)));
+		HAL_UART_Transmit(&huart2,output,sizeof(output),100);
+	}
+	HAL_UART_Transmit(&huart2,"	",sizeof("	"),100);
+	sprintf(output,"%d.%02u", (int) temp_setpoint, (int) fabs(((temp_setpoint - (int) temp_setpoint ) * 100)));
+	HAL_UART_Transmit(&huart2,output,sizeof(output),100);
+	HAL_UART_Transmit(&huart2,"	",sizeof("	"),100);
+	sprintf(output,"%d.%02u", (int) duty_cycle_global, (int) fabs(((duty_cycle_global - (int) duty_cycle_global ) * 100)));
+	HAL_UART_Transmit(&huart2,output,sizeof(output),100);
+	HAL_UART_Transmit(&huart2,"\r\n",sizeof("\r\n"),100);
+	//HAL_Delay(10);
+}
 
 /**
  * @brief convert given duty cycle fraction into correct CRR/ARR ratio and writes to the CCR1 register of TIM14
@@ -1195,37 +1213,30 @@ void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin){
 
 	switch(GPIO_Pin){
 	case SW1:
-		set_PWM_driveFET(0);
-		HAL_GPIO_WritePin(GPIOB,SS_FET,GPIO_PIN_RESET);
-		/*switch (current_state){
+		//HAL_GPIO_WritePin(GPIOB,SS_FET,GPIO_PIN_RESET);
+		switch (current_state){
 		case STEADY_STATE:
 			current_state = CUTTING;
 			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Ready to cut",sizeof("\r\n Ready to cut"),10);
-			HAL_Delay(10);
+			break;
 		case CUTTING:
 			current_state = COOLDOWN;
+			break;
 		}
-		HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n NOT",sizeof("\r\n NOT"),10);*/
-		break;
+	break;
 	case SW2:
-		set_PWM_driveFET(0.01);
-		//HAL_GPIO_WritePin(GPIOB,SS_FET,GPIO_PIN_SET);
-
-		/*switch (current_state){
+		switch (current_state){
 		case POWER_ON:
 			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Please Wait",sizeof("\r\n Please Wait"),10);
 			current_state = POWER_ON;
-			HAL_Delay(10);
 			break;
 		case INITIALISING:
 			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Please Wait",sizeof("\r\n Please Wait"),10);
 			current_state=INITIALISING;
-			HAL_Delay(10);
 			break;
 		case INITIALISED:
 			current_state = SETTLING_STATE;
 			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Heating to Setpoint",sizeof("\r\n Heating to Setpoint"),10);
-			HAL_Delay(10);
 			break;
 		case SETTLING_STATE:
 			current_state = INITIALISING;
@@ -1234,7 +1245,6 @@ void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin){
 			current_state = INITIALISING;
 			HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n Heating turned off",sizeof("\r\n Heating turned off"),10);
 		}
-		HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n HERE",sizeof("\r\n HERE"),10);*/
 		break;
 	}
 }
@@ -1247,7 +1257,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc){
     	//TIM14->CCR1 = pot_reading;
 		//float duty_cycle = pot_reading/4095.0;
 		//set_PWM_driveFET(duty_cycle);
-    	//temp_setpoint=pot_temp();
+    	temp_setpoint=pot_temp();
 		//temp_setpoint = pot_reading * scaling;
 	}
 
@@ -1266,7 +1276,13 @@ void warm_up_controller(){
 	derivative = error - prev_error;
 
 	float duty_cycle = (Kp_warming * error) + (Ki_warming*integral) + (Kd_warming*derivative);
+	duty_cycle = duty_cycle/100.0;
 	prev_error = error;
+	if(duty_cycle>1){
+		duty_cycle = 1;
+	}else if(duty_cycle<0){
+		duty_cycle = 0;
+	}
 	set_PWM_driveFET(duty_cycle);
 }
 /**
@@ -1283,6 +1299,11 @@ void cutting_controller(){
 	derivative = error - prev_error;
 
 	float duty_cycle = (Kp_cutting * error) + (Ki_cutting * integral) + (Kd_cutting * derivative);
+	if(duty_cycle >= DUTY_CYCLE_MAX){
+		duty_cycle = DUTY_CYCLE_MAX;
+	}else if(duty_cycle <0){
+		duty_cycle = 0;
+	}
 	prev_error = error;
 	set_PWM_driveFET(duty_cycle);
 }
