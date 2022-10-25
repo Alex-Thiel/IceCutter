@@ -61,9 +61,9 @@ UART_HandleTypeDef huart2;
 #define INA_POWER_REG 		0x03
 #define INA_CURRENT_REG  	0x04
 #define INA_CALIB_REG  		0x05
-#define INA_CAL  			0xAEC3//0x7482//0xA6C2//0x7482
+#define INA_CAL  			0x7482//0xA6C2//0x7482
 #define INA_CAL_INPUT		0x96A8
-#define INA_CURRENT_LSB 	0.001220703//0.001831055
+#define INA_CURRENT_LSB 	0.001831055
 #define INA_POWER_LSB 		0.0366211 //current_LSB *20
 #define INA_CONFIG_VALUE 	0x299F //sets PGA =2
 #define INA_CONFIG_PGA_8	0x399F //set PGA = 8
@@ -74,7 +74,7 @@ UART_HandleTypeDef huart2;
 
 #define TMP_TEMP_REG  		0x00
 #define TMP_LSB  			0.0078125 //set from datasheet
-#define ARR_MAX 			15999//0xFFF; //for 12bit resolution @ Fclk = 16MHz
+#define ARR_MAX 			63491//15999//0xFFF; //for 12bit resolution @ Fclk = 16MHz
 #define TMP_ADD_WIRE 		0x48
 #define TMP_ADD_INPUT 		0x49
 #define TMP_ADD_AMBIENT 	0x4A
@@ -126,9 +126,9 @@ UART_HandleTypeDef huart2;
 #define DUTY_CYCLE_MAX 1
 
 #define FCLK			16000000
-#define PSC				80//73//20
+#define PSC				245//73//20
 #define MAX_ARR			65535
-#define ON_TIME			0.005
+#define ON_TIME			0.01
 
 #define Ki_warming 0
 #define Kp_warming 0
@@ -273,9 +273,9 @@ int main(void)
 	  HAL_ADC_Start_DMA (&hadc1, &pot_reading, 1);
 	  if(temp_checks()==IN_THRESHOLD){
 		  //monitor_input_current();
-		  wire_temp_average();
+		  //wire_temp_average();
 		  UART_output();
-		  //wire_temp_calc();
+		  wire_temp_calc();
 		  //state_estimate();
 		  switch (current_state){
 		  case POWER_ON:
@@ -538,7 +538,7 @@ static void MX_TIM3_Init(void)
   htim3.Instance = TIM3;
   htim3.Init.Prescaler = 1;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 26666;
+  htim3.Init.Period = 65535;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
@@ -584,9 +584,9 @@ static void MX_TIM14_Init(void)
 
   /* USER CODE END TIM14_Init 1 */
   htim14.Instance = TIM14;
-  htim14.Init.Prescaler = 80;
+  htim14.Init.Prescaler = 245;
   htim14.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim14.Init.Period = 65535;
+  htim14.Init.Period = 63491;
   htim14.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim14.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim14) != HAL_OK)
@@ -868,9 +868,9 @@ static void MX_GPIO_Init(void)
  float wire_temp_calc(){
 	 float temp = 0;
 	 float wire_current = current_output;//measure_current(WIRE_INA219);
-	 HAL_Delay(0.5);
+	 //HAL_Delay(0.5);
 	 //wire_current = current_output;
-	 float board_resistance = 0.10726;
+	 float board_resistance = 0.010726;
 	 float red_lead = 0.00001;
 	 float black_lead = 0.00007;
 	 float board_impedance = board_resistance+red_lead+black_lead;
@@ -895,7 +895,6 @@ static void MX_GPIO_Init(void)
 	 }
 
 	 if(temp <= MAX_ALLOWED_TEMP && temp >=-200){
-		 return temp;
 		 //prev_wire_temp_global = wire_temp_global;
 		 //wire_temp_global = temp;
 	 } else if(temp>MAX_ALLOWED_TEMP && prev_wire_temp_global >=TMP_Output){
@@ -906,7 +905,7 @@ static void MX_GPIO_Init(void)
 		 //wire_temp_global = temp;
 	 }
 	 }
-	 //wire_temp_global = temp;
+	 wire_temp_global = temp;
 
 	 //counter_temp += 1;
 	 return temp;
@@ -1209,7 +1208,7 @@ void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin){
 		HAL_UART_Transmit(&huart2,(uint8_t *)"\r\n NOT",sizeof("\r\n NOT"),10);*/
 		break;
 	case SW2:
-		set_PWM_driveFET(0.7);
+		set_PWM_driveFET(0.01);
 		//HAL_GPIO_WritePin(GPIOB,SS_FET,GPIO_PIN_SET);
 
 		/*switch (current_state){
