@@ -121,7 +121,7 @@ UART_HandleTypeDef huart2;
 #define ABOVE_THRESHOLD 0
 #define IN_THRESHOLD 	1
 
-#define MAX_ALLOWED_TEMP 	1446//1446.0 //0x5A6 = 1446 = Nickel Melting temp
+#define MAX_ALLOWED_TEMP 	1446//1446//1446.0 //0x5A6 = 1446 = Nickel Melting temp
 #define POT_MAX_READING 	4095.0
 #define DUTY_CYCLE_MAX 		1
 
@@ -131,8 +131,8 @@ UART_HandleTypeDef huart2;
 #define ON_TIME			0.01
 
 #define Ki_warming 0.00002
-#define Kp_warming 5
-#define Kd_warming 0
+#define Kp_warming 1.1
+#define Kd_warming 0.00000000001
 float integral = 0;
 float derivative = 0;
 float prev_error = 0;
@@ -315,7 +315,7 @@ int main(void)
 		  break;
 		  }
 		  UART_temp_only();
-		  HAL_Delay(100);
+		  HAL_Delay(130);
 		  //UART_output();
 		  //if(counter_uart == 3){
 			  //UART_output();
@@ -591,9 +591,9 @@ static void MX_TIM14_Init(void)
   htim14.Instance = TIM14;
   htim14.Init.Prescaler = 245;
   htim14.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim14.Init.Period = 63491;
+  htim14.Init.Period = 4095;
   htim14.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim14.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  htim14.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim14) != HAL_OK)
   {
     Error_Handler();
@@ -888,7 +888,7 @@ static void MX_GPIO_Init(void)
 	 }else{
 
 	 if(CUTTER_TYPE==1){
-		 temp = wire_resistance/(R_REF_NICKEL*1.6*NICKEL_TCR);//todo remove x3
+		 temp = wire_resistance/(R_REF_NICKEL*1.2*NICKEL_TCR);//todo remove x3
 		 temp = temp - (1/NICKEL_TCR);
 		 temp = temp + T_REF_NICKEL;
 	 }else{
@@ -897,10 +897,10 @@ static void MX_GPIO_Init(void)
 		 temp = temp + T_REF_COPPER;
 	 }
 
-	 if(temp <= MAX_ALLOWED_TEMP && temp >=-200){
+	 if(temp <= MAX_ALLOWED_TEMP && temp >=-300.0){
 		 //prev_wire_temp_global = wire_temp_global;
 		 //wire_temp_global = temp;
-	 } else if(temp>MAX_ALLOWED_TEMP && prev_wire_temp_global >=TMP_Output){
+	 }else if(temp>MAX_ALLOWED_TEMP && prev_wire_temp_global >=TMP_Output){
 		 temp = prev_wire_temp_global;
 		 //wire_temp_global = temp;
 	 }else{
@@ -939,8 +939,8 @@ static void MX_GPIO_Init(void)
  void ina_initialise(){
 	   write_to_register(WIRE_INA219,INA_CALIB_REG, INA_CAL);
 	   write_to_register(INPUT_INA219, INA_CALIB_REG, INA_CAL_INPUT);
-	   write_to_register(WIRE_INA219, INA_CONFIG_REG, INA_CONFIG_8_SAMP);
-	   write_to_register(INPUT_INA219, INA_CONFIG_REG, INA_CONFIG_8_SAMP);
+	   write_to_register(WIRE_INA219, INA_CONFIG_REG, INA_CONFIG_4_SAMP);
+	   write_to_register(INPUT_INA219, INA_CONFIG_REG, INA_CONFIG_4_SAMP);
  }
 
 
@@ -1038,7 +1038,7 @@ static void MX_GPIO_Init(void)
 	   HAL_GPIO_WritePin(GPIOB,SS_FET, GPIO_PIN_SET);//allow SS_FET to conduct to keep caps charged
 	   HAL_GPIO_WritePin(GPIOC, GREEN_LED, GPIO_PIN_SET); // green LED2 turn on, system ready to cut
 	   current_state = INITIALISED;
-	   UART_output();
+	   //UART_output();
  }
 
 
@@ -1273,15 +1273,20 @@ void warm_up_controller(){
 	float error = temp_setpoint - wire_temp;
 
 	integral = integral + error;
+	float int_comp = Ki_warming*integral;
+	if (int_comp >1000000){
+		int_comp = 1000000;
+	}
 	derivative = error - prev_error;
 
-	float duty_cycle = (Kp_warming * error) + (Ki_warming*integral) + (Kd_warming*derivative);
+
+	float duty_cycle = (Kp_warming * error) + (int_comp) + (Kd_warming*derivative);
 	duty_cycle = duty_cycle/100.0;
 	prev_error = error;
 	if(duty_cycle>1){
 		duty_cycle = 1;
 	}else if(duty_cycle<0){
-		duty_cycle = 0;
+		duty_cycle = 0.01;
 	}
 	set_PWM_driveFET(duty_cycle);
 }
@@ -1362,7 +1367,7 @@ void state_estimate(){
     		current_state = SETTLING_STATE;
     	}else if(fabs(wire_temp_global-temp_setpoint) < WARM_UP_THRESHOLD){ //wire heated to set point
     	    current_state = STEADY_STATE;
-    	}else if(diff_wire_temp < CUTTING_THRESHOLD){ //wire temp decreased  more than threshold
+    	}else if(diff_wire_temp > CUTTING_THRESHOLD){ //wire temp decreased  more than threshold
     	    current_state = CUTTING;
     	}
     	break;
@@ -1396,7 +1401,7 @@ void state_estimate(){
     	//stop wire heating and reinitialise the system
     	current_state = UNKNOWN_STATE;
     	set_PWM_driveFET(0);
-    	startup_initialisation();
+    	//startup_initialisation();
     	break;
     }
     }
